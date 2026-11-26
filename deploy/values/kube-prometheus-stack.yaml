@@ -62,6 +62,21 @@ grafana:
   resources:
     requests: { cpu: 25m, memory: 128Mi }
     limits: { memory: 384Mi }
+  # Grafana builds its internal database on first start, which can take
+  # minutes on a small node. Keep it on a volume so a restart doesn't
+  # start over, and give the first start time before liveness checks.
+  persistence:
+    enabled: true
+    size: 1Gi
+  deploymentStrategy:
+    type: Recreate # the volume is ReadWriteOnce
+  livenessProbe:
+    httpGet:
+      path: /api/health
+      port: grafana
+    initialDelaySeconds: 180
+    timeoutSeconds: 30
+    failureThreshold: 10
   additionalDataSources:
     - name: Loki
       type: loki
