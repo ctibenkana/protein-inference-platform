@@ -68,8 +68,14 @@ grafana:
   persistence:
     enabled: true
     size: 1Gi
+  # The volume is ReadWriteOnce, so the old pod must stop before the new one
+  # starts. maxSurge 0 does that without switching the type to Recreate,
+  # which server-side apply rejects on an existing RollingUpdate Deployment.
   deploymentStrategy:
-    type: Recreate # the volume is ReadWriteOnce
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
   livenessProbe:
     httpGet:
       path: /api/health
