@@ -1,0 +1,28 @@
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+crash.log
+crash.*.log
+*.tfvars
+!*.tfvars.example
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
+# Credentials, never committed
+*.json.key
+*-key.json
+credentials*.json
+.env
+.env.*
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

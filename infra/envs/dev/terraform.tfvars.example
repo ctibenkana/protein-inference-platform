@@ -1,0 +1,7 @@
+# Copy to terraform.tfvars (git-ignored) and fill in.
+project_id = "your-project-id"
+
+# Your public IP as a /32, so only you can reach the cluster API.
+authorized_networks = [
+  { cidr_block = "203.0.113.10/32", display_name = "my-laptop" },
+]
