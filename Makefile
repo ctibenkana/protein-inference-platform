@@ -27,7 +27,7 @@ GRAFANA_PORT ?= 3300
 ARGOCD_PORT  ?= 8380
 
 .PHONY: help check init plan up down creds fmt validate \
-        kind-up kind-down context-guard argocd grafana-secret status ui-argocd ui-grafana
+        kind-up kind-down context-guard embed-image embed-job argocd grafana-secret status ui-argocd ui-grafana
 
 help:
 	@grep -E '^#' Makefile | sed 's/^# \{0,1\}//'
@@ -92,6 +92,22 @@ argocd: grafana-secret
 status:
 	@kubectl -n argocd get applications.argoproj.io \
 		-o custom-columns=APP:.metadata.name,SYNC:.status.sync.status,HEALTH:.status.health.status
+
+# --- ESM-2 embedding job -----------------------------------------------------
+#   make embed-image  (build the image locally)
+#   make embed-job    (run one job on the current cluster, print its summary)
+
+EMBED_IMAGE ?= esm-embed:dev
+
+embed-image:
+	docker build -t $(EMBED_IMAGE) workloads/esm-embed
+
+embed-job: context-guard
+	@if [ "$(KCTX)" = "kind-pip-local" ]; then kind load docker-image $(EMBED_IMAGE) --name pip-local; fi
+	@job=$$(sed 's|image: IMAGE|image: $(EMBED_IMAGE)|' workloads/esm-embed/k8s/job.yaml | kubectl create -f - -o name) && \
+	echo "submitted $$job, waiting for it to finish..." && \
+	kubectl -n inference wait --for=condition=complete $$job --timeout=20m && \
+	kubectl -n inference logs $$job | grep ' summary ' | sed 's/.* summary //'
 
 ui-argocd:
 	@echo "Argo CD: http://localhost:$(ARGOCD_PORT)  user: admin  password:"

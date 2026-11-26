@@ -1,0 +1,20 @@
+# Long-lived objects for inference workloads (monitors, later services).
+# Individual job runs are submitted on demand and are not synced here.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: inference
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/ctibenkana/protein-inference-platform.git
+    targetRevision: main
+    path: deploy/manifests/inference
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: inference
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

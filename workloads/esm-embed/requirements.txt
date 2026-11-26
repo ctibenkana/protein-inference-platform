@@ -1,0 +1,4 @@
+# Pinned runtime dependencies (torch is installed separately, CPU build).
+numpy==2.5.5
+prometheus-client==0.26.0
+transformers==5.24.1

@@ -1,0 +1,13 @@
+# Prometheus scrapes every running esm-embed job pod.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: esm-embed
+  namespace: inference
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: esm-embed
+  podMetricsEndpoints:
+    - port: metrics
+      interval: 10s

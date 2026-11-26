@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "esm-embed"
+dynamic = ["version"]
+description = "Batch ESM-2 protein embeddings with measurable batching strategies"
+license = "Apache-2.0"
+requires-python = ">=3.12"
+# Runtime versions are pinned in requirements.txt; torch is installed
+# separately (CPU build) because its wheel index differs by platform.
+dependencies = [
+    "numpy>=2.2",
+    "prometheus-client>=0.21",
+    "transformers>=5.0",
+    "torch>=2.6",
+]
+
+[project.scripts]
+esm-embed = "esm_embed.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "esm_embed.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "model: needs the ESM-2 model weights (downloads ~30 MB on first run)",
+]

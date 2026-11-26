@@ -15,6 +15,14 @@ override.tf.json
 .terraformrc
 terraform.rc
 
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+*.npy
+
 # Credentials, never committed
 *.json.key
 *-key.json
