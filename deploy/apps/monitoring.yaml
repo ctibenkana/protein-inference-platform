@@ -1,0 +1,28 @@
+# Prometheus, Alertmanager, Grafana, kube-state-metrics, node-exporter.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: monitoring
+  namespace: argocd
+spec:
+  project: default
+  sources:
+    - repoURL: https://prometheus-community.github.io/helm-charts
+      chart: kube-prometheus-stack
+      targetRevision: 94.1.0
+      helm:
+        releaseName: kps
+        valueFiles:
+          - $values/deploy/values/kube-prometheus-stack.yaml
+    - repoURL: https://github.com/ctibenkana/protein-inference-platform.git
+      targetRevision: main
+      ref: values
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true # the operator's CRDs exceed client-side apply limits

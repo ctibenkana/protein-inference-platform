@@ -1,0 +1,20 @@
+# Namespaces, Pod Security levels and network policies that workloads rely on.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: platform-base
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-5"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/ctibenkana/protein-inference-platform.git
+    targetRevision: main
+    path: deploy/manifests/platform-base
+  destination:
+    server: https://kubernetes.default.svc
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

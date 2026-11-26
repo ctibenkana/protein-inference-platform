@@ -3,13 +3,22 @@
 #   make up     (start of a work session: create network + cluster)
 #   make creds  (point kubectl at the cluster)
 #   make down   (end of the session: destroy it, stop paying for it)
+#   Requires TF_STATE_BUCKET, e.g.  export TF_STATE_BUCKET=my-project-tfstate
 #
-# Requires TF_STATE_BUCKET, e.g.  export TF_STATE_BUCKET=my-project-tfstate
+# GitOps layer, on any cluster kubectl points at (GKE or local kind):
+#   make kind-up   (local only: create a kind cluster in Docker)
+#   make argocd    (install Argo CD once; it then syncs deploy/ from git)
+#   make status    (list Argo CD applications and their health)
+#   make ui-argocd / make ui-grafana   (open the UIs via port-forward)
+#   make kind-down (local only: delete the kind cluster)
 
 ENV_DIR := infra/envs/dev
 TF      := terraform -chdir=$(ENV_DIR)
 
-.PHONY: help check init plan up down creds fmt validate
+ARGOCD_CHART_VERSION := 10.20.0
+
+.PHONY: help check init plan up down creds fmt validate \
+        kind-up kind-down argocd grafana-secret status ui-argocd ui-grafana
 
 help:
 	@grep -E '^#' Makefile | sed 's/^# \{0,1\}//'
@@ -40,3 +49,42 @@ validate:
 		terraform -chdir=$$d init -backend=false -input=false >/dev/null && \
 		terraform -chdir=$$d validate || exit 1; \
 	done
+
+# --- GitOps layer ------------------------------------------------------------
+
+kind-up:
+	kind create cluster --config deploy/local/kind.yaml
+
+kind-down:
+	kind delete cluster --name pip-local
+
+# Grafana's admin password is generated here and stored only in the cluster.
+grafana-secret:
+	@kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+	@kubectl -n monitoring get secret grafana-admin >/dev/null 2>&1 || \
+		kubectl -n monitoring create secret generic grafana-admin \
+			--from-literal=admin-user=admin \
+			--from-literal=admin-password="$$(openssl rand -base64 24)"
+	@echo "grafana-admin secret present in namespace monitoring"
+
+argocd: grafana-secret
+	helm repo add argo https://argoproj.github.io/argo-helm --force-update >/dev/null
+	helm upgrade --install argocd argo/argo-cd --version $(ARGOCD_CHART_VERSION) \
+		--namespace argocd --create-namespace \
+		--values deploy/values/argo-cd.yaml --wait --timeout 10m
+	kubectl apply -f deploy/root.yaml
+	@echo "Argo CD installed; it now syncs deploy/apps from git. Run: make status"
+
+status:
+	@kubectl -n argocd get applications.argoproj.io \
+		-o custom-columns=APP:.metadata.name,SYNC:.status.sync.status,HEALTH:.status.health.status
+
+ui-argocd:
+	@echo "Argo CD: http://localhost:8080  user: admin  password:"
+	@kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d; echo
+	kubectl -n argocd port-forward svc/argocd-server 8080:80
+
+ui-grafana:
+	@echo "Grafana: http://localhost:3000  user: admin  password:"
+	@kubectl -n monitoring get secret grafana-admin -o jsonpath='{.data.admin-password}' | base64 -d; echo
+	kubectl -n monitoring port-forward svc/kps-grafana 3000:80

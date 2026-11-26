@@ -1,0 +1,45 @@
+# Argo CD, sized for a single small system node.
+# Installed once with Helm by `make argocd`, then managed by Argo CD itself
+# (deploy/apps/argocd.yaml), so later changes go through git like everything else.
+
+global:
+  nodeSelector:
+    kubernetes.io/os: linux
+
+configs:
+  params:
+    # Reached through `kubectl port-forward` only; no public ingress yet.
+    server.insecure: true
+  cm:
+    # Track resources by annotation so Helm-style labels never collide
+    # with Argo CD's own ownership tracking.
+    application.resourceTrackingMethod: annotation
+    timeout.reconciliation: 180s
+
+# Not used: single admin, no SSO, no notifications, app-of-apps instead of ApplicationSets.
+dex:
+  enabled: false
+notifications:
+  enabled: false
+applicationSet:
+  replicas: 0
+
+controller:
+  resources:
+    requests: { cpu: 100m, memory: 384Mi }
+    limits: { memory: 768Mi }
+
+repoServer:
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { memory: 512Mi }
+
+server:
+  resources:
+    requests: { cpu: 25m, memory: 64Mi }
+    limits: { memory: 256Mi }
+
+redis:
+  resources:
+    requests: { cpu: 25m, memory: 32Mi }
+    limits: { memory: 128Mi }

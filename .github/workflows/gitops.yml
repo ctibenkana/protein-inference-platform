@@ -1,0 +1,58 @@
+name: gitops
+
+on:
+  pull_request:
+    paths:
+      - "deploy/**"
+      - "scripts/render_apps.py"
+      - ".github/workflows/gitops.yml"
+  push:
+    branches: [main]
+    paths:
+      - "deploy/**"
+      - "scripts/render_apps.py"
+      - ".github/workflows/gitops.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gitops-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  HELM_VERSION: "v4.3.2"
+  KUBECONFORM_VERSION: "v0.8.0"
+  # Custom resource schemas (Argo CD Applications, ServiceMonitors, ...).
+  CRD_SCHEMAS: "https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
+
+jobs:
+  render-and-validate:
+    name: render charts, validate manifests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: install kubeconform
+        run: |
+          curl -fsSL -o /tmp/kubeconform.tgz \
+            "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          tar -xzf /tmp/kubeconform.tgz -C /usr/local/bin kubeconform
+          kubeconform -v
+
+      - name: render every Argo CD application
+        run: |
+          python3 -m pip install --quiet pyyaml==6.0.4
+          python3 scripts/render_apps.py rendered
+
+      - name: validate rendered manifests and Argo CD applications
+        run: |
+          kubeconform -strict -summary -ignore-missing-schemas \
+            -schema-location default -schema-location "$CRD_SCHEMAS" \
+            rendered/*.yaml deploy/root.yaml deploy/apps/*.yaml

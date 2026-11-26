@@ -1,0 +1,10 @@
+# Namespace for Prometheus, Grafana, Loki and Alloy.
+# "privileged" is deliberate and limited to this namespace: node-exporter
+# needs host network and host PID access to read node metrics.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  labels:
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/warn: baseline

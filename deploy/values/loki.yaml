@@ -1,0 +1,57 @@
+# Loki in single-binary mode with filesystem storage: one pod, one volume.
+# Fine for dev; move chunks to a GCS bucket when the service goes live.
+
+deploymentMode: SingleBinary
+
+loki:
+  auth_enabled: false
+  commonConfig:
+    replication_factor: 1
+  storage:
+    type: filesystem
+  schemaConfig:
+    configs:
+      - from: "2024-04-01"
+        store: tsdb
+        object_store: filesystem
+        schema: v13
+        index:
+          prefix: index_
+          period: 24h
+  limits_config:
+    retention_period: 168h # 7 days, matching Prometheus
+  compactor:
+    retention_enabled: true
+    delete_request_store: filesystem
+
+singleBinary:
+  replicas: 1
+  persistence:
+    enabled: true
+    size: 10Gi
+  resources:
+    requests: { cpu: 50m, memory: 256Mi }
+    limits: { memory: 768Mi }
+
+# Scalable-mode components off.
+backend:
+  replicas: 0
+read:
+  replicas: 0
+write:
+  replicas: 0
+
+# The default caches request several GB of memory; not needed at this scale.
+chunksCache:
+  enabled: false
+resultsCache:
+  enabled: false
+
+gateway:
+  enabled: false
+lokiCanary:
+  enabled: false
+test:
+  enabled: false
+minio:
+  enabled: false

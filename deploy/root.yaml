@@ -1,0 +1,20 @@
+# The root of the app-of-apps tree. Applied once by `make argocd`;
+# it syncs every Application in deploy/apps, and they sync everything else.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/ctibenkana/protein-inference-platform.git
+    targetRevision: main
+    path: deploy/apps
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

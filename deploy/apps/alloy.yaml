@@ -1,0 +1,27 @@
+# Log collection: Grafana Alloy tails pod logs through the Kubernetes API
+# and ships them to Loki, dropping anything that looks like a protein sequence.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: alloy
+  namespace: argocd
+spec:
+  project: default
+  sources:
+    - repoURL: https://grafana.github.io/helm-charts
+      chart: alloy
+      targetRevision: 1.16.0
+      helm:
+        releaseName: alloy
+        valueFiles:
+          - $values/deploy/values/alloy.yaml
+    - repoURL: https://github.com/ctibenkana/protein-inference-platform.git
+      targetRevision: main
+      ref: values
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

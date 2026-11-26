@@ -8,9 +8,9 @@ Cost is treated as a design constraint, not an afterthought: the cluster is
 built to cost very little when idle, scale to zero when there is no work, and
 be created or destroyed from code in minutes.
 
-> **Status:** stage 1 of the platform. GCP foundation, network and GKE
-> cluster as code, plus CI. Next come GitOps (Argo CD + Helm), observability
-> (Prometheus, Grafana, Loki) and the first inference workloads. See the
+> **Status:** GCP foundation, network and GKE cluster as code, with CI.
+> GitOps and observability layer (Argo CD, Prometheus, Grafana, Loki, Alloy)
+> defined and validated in CI. Next: the first inference workloads. See the
 > [roadmap](#roadmap).
 
 ## Architecture
@@ -86,8 +86,39 @@ Accepted findings in dev, with reasons:
 - **CI checks and plans; it never applies.** Pull requests run format, validate,
   lint, security scan and a `terraform plan` shown in the job summary. Applies
   run from an operator's machine for now.
-- **The cluster will pull, not be pushed to.** Deployments will come from Argo CD
-  watching this repository, so CI never needs credentials for the cluster.
+- **The cluster pulls; nothing pushes to it.** Argo CD watches `deploy/` in this
+  repository and syncs the cluster to it, so CI never holds cluster credentials.
+- **App of apps.** One root Application (`deploy/root.yaml`) syncs everything
+  in `deploy/apps/`. Argo CD manages its own installation the same way, so even
+  upgrades to the deployer go through a pull request.
+- **Every chart is pinned** to an exact version, with values kept in
+  `deploy/values/`. CI renders each application exactly as Argo CD would and
+  validates every object, including custom resources, against its schema.
+
+### Observability
+
+| Component | Role |
+|---|---|
+| Prometheus + Alertmanager (kube-prometheus-stack) | Metrics, 7-day retention, picks up monitors from every namespace |
+| Grafana | Dashboards over Prometheus and Loki; admin password generated in-cluster, never in git |
+| Loki (single binary) | Log storage, 7-day retention |
+| Grafana Alloy | Tails pod logs through the Kubernetes API and ships them to Loki |
+
+All components have explicit resource requests and limits, sized to fit
+together on the single small system node.
+
+**Lab data never reaches the logs.** Services must not log protein
+sequences. As a second safeguard, Alloy drops any log line containing a run
+of 30 or more amino-acid letters before it's stored, and counts the drops.
+
+### Workload isolation
+
+- The `inference` namespace enforces the Kubernetes **restricted** Pod
+  Security level: no root, no privilege escalation, no host access.
+- Its **network policies deny all incoming traffic** except Prometheus
+  scraping. Services will open specific paths as they're added.
+- `monitoring` is the only privileged namespace, because node-exporter needs
+  host access to read node metrics.
 
 ## Repository layout
 
@@ -98,8 +129,18 @@ infra/
   modules/
     network/      VPC, subnet with pod/service ranges, router, Cloud NAT
     gke/          cluster, node pools, node service account
-.github/workflows/terraform.yml
-Makefile          session workflow: init, up, creds, down
+deploy/
+  root.yaml       root Argo CD Application (app of apps)
+  apps/           one Argo CD Application per component, charts pinned
+  values/         Helm values for each chart
+  manifests/      plain manifests: namespaces, Pod Security, network policies
+  local/kind.yaml local cluster for developing without cloud costs
+scripts/
+  render_apps.py  renders each application as Argo CD would (used by CI)
+.github/workflows/
+  terraform.yml   fmt, validate, tflint, trivy, plan
+  gitops.yml      render charts, validate every object against its schema
+Makefile          session and GitOps commands (make help)
 ```
 
 ## Getting started
@@ -131,11 +172,25 @@ To enable `terraform plan` in CI, set these repository variables from the
 bootstrap outputs: `GCP_PROJECT_ID`, `GCP_WIF_PROVIDER`, `GCP_PLAN_SA`,
 `TF_STATE_BUCKET`, `TF_AUTHORIZED_NETWORKS`.
 
+### GitOps layer, on GKE or locally
+
+The same configuration runs on GKE or on a local
+[kind](https://kind.sigs.k8s.io/) cluster in Docker (about 4 GB of memory):
+
+```bash
+make kind-up      # local only; on GKE, run `make creds` instead
+make argocd       # installs Argo CD; it then syncs everything in deploy/
+make status       # wait until every application is Synced / Healthy
+make ui-grafana   # http://localhost:3000 (prints the admin password)
+make ui-argocd    # http://localhost:8080
+make kind-down
+```
+
 ## Roadmap
 
 1. **Foundation** ✅ GCP foundation, network, GKE, CI with lint and security scanning
-2. **GitOps:** Argo CD, Helm charts, app-of-apps layout
-3. **Observability:** Prometheus, Grafana, Loki; SLOs, alerts and runbooks
+2. **GitOps:** Argo CD (self-managed), app of apps, pinned Helm charts, CI rendering and schema validation. Defined and validated; first live sync pending.
+3. **Observability:** Prometheus, Grafana, Loki and Alloy defined; then SLOs, alerts and runbooks
 4. **Releases:** container builds with signed images and versioned releases
 5. **First workloads:** a small model served with vLLM; ESM-2 embedding jobs on the worker pool
 6. **Spot GPU pool** for benchmark days, scaling to zero
