@@ -17,8 +17,13 @@ TF      := terraform -chdir=$(ENV_DIR)
 
 ARGOCD_CHART_VERSION := 10.20.0
 
+# GitOps targets refuse to run unless kubectl points at one of these, so a
+# stray context can never receive an install by accident.
+ALLOWED_CONTEXTS := kind-pip-local gke_%_pip-dev
+KCTX = $(shell kubectl config current-context 2>/dev/null)
+
 .PHONY: help check init plan up down creds fmt validate \
-        kind-up kind-down argocd grafana-secret status ui-argocd ui-grafana
+        kind-up kind-down context-guard argocd grafana-secret status ui-argocd ui-grafana
 
 help:
 	@grep -E '^#' Makefile | sed 's/^# \{0,1\}//'
@@ -58,8 +63,13 @@ kind-up:
 kind-down:
 	kind delete cluster --name pip-local
 
+context-guard:
+	@test -n "$(filter $(ALLOWED_CONTEXTS),$(KCTX))" || \
+		(echo "Refusing: kubectl context is '$(KCTX)', expected kind-pip-local or the pip-dev GKE cluster" && exit 1)
+	@echo "kubectl context: $(KCTX)"
+
 # Grafana's admin password is generated here and stored only in the cluster.
-grafana-secret:
+grafana-secret: context-guard
 	@kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 	@kubectl -n monitoring get secret grafana-admin >/dev/null 2>&1 || \
 		kubectl -n monitoring create secret generic grafana-admin \
