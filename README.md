@@ -10,8 +10,8 @@ be created or destroyed from code in minutes.
 
 > **Status:** GCP foundation, network and GKE cluster as code, with CI.
 > GitOps and observability layer (Argo CD, Prometheus, Grafana, Loki, Alloy)
-> defined and validated in CI. Next: the first inference workloads. See the
-> [roadmap](#roadmap).
+> running and verified on a local cluster; GKE deployment waits on billing.
+> Next: the first inference workloads. See the [roadmap](#roadmap).
 
 ## Architecture
 
@@ -181,16 +181,16 @@ The same configuration runs on GKE or on a local
 make kind-up      # local only; on GKE, run `make creds` instead
 make argocd       # installs Argo CD; it then syncs everything in deploy/
 make status       # wait until every application is Synced / Healthy
-make ui-grafana   # http://localhost:3000 (prints the admin password)
-make ui-argocd    # http://localhost:8080
+make ui-grafana   # http://localhost:3300 (prints the admin password)
+make ui-argocd    # http://localhost:8380 (ports overridable: GRAFANA_PORT=, ARGOCD_PORT=)
 make kind-down
 ```
 
 ## Roadmap
 
 1. **Foundation** ✅ GCP foundation, network, GKE, CI with lint and security scanning
-2. **GitOps:** Argo CD (self-managed), app of apps, pinned Helm charts, CI rendering and schema validation. Defined and validated; first live sync pending.
-3. **Observability:** Prometheus, Grafana, Loki and Alloy defined; then SLOs, alerts and runbooks
+2. **GitOps** ✅ Argo CD (self-managed), app of apps, pinned Helm charts, CI rendering and schema validation; verified on a local cluster
+3. **Observability:** Prometheus, Grafana, Loki and Alloy ✅ verified (logs reach Loki; sequence-like lines dropped and counted); next come SLOs, alerts and runbooks
 4. **Releases:** container builds with signed images and versioned releases
 5. **First workloads:** a small model served with vLLM; ESM-2 embedding jobs on the worker pool
 6. **Spot GPU pool** for benchmark days, scaling to zero

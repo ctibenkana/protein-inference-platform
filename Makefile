@@ -22,6 +22,10 @@ ARGOCD_CHART_VERSION := 10.20.0
 ALLOWED_CONTEXTS := kind-pip-local gke_%_pip-dev
 KCTX = $(shell kubectl config current-context 2>/dev/null)
 
+# Local ports for the UIs; override if busy, e.g. make ui-grafana GRAFANA_PORT=3400
+GRAFANA_PORT ?= 3300
+ARGOCD_PORT  ?= 8380
+
 .PHONY: help check init plan up down creds fmt validate \
         kind-up kind-down context-guard argocd grafana-secret status ui-argocd ui-grafana
 
@@ -90,11 +94,11 @@ status:
 		-o custom-columns=APP:.metadata.name,SYNC:.status.sync.status,HEALTH:.status.health.status
 
 ui-argocd:
-	@echo "Argo CD: http://localhost:8080  user: admin  password:"
+	@echo "Argo CD: http://localhost:$(ARGOCD_PORT)  user: admin  password:"
 	@kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d; echo
-	kubectl -n argocd port-forward svc/argocd-server 8080:80
+	kubectl -n argocd port-forward svc/argocd-server $(ARGOCD_PORT):80
 
 ui-grafana:
-	@echo "Grafana: http://localhost:3000  user: admin  password:"
+	@echo "Grafana: http://localhost:$(GRAFANA_PORT)  user: admin  password:"
 	@kubectl -n monitoring get secret grafana-admin -o jsonpath='{.data.admin-password}' | base64 -d; echo
-	kubectl -n monitoring port-forward svc/kps-grafana 3000:80
+	kubectl -n monitoring port-forward svc/kps-grafana $(GRAFANA_PORT):80
