@@ -46,9 +46,18 @@ alertmanager:
       group_interval: 5m
       repeat_interval: 4h
       routes:
-        # Heartbeat and helper alerts from kube-prometheus-stack: never notify.
+        # Dead man's switch: Watchdog always fires while Prometheus and
+        # Alertmanager work. Ping an external check every minute; if the
+        # pings stop (cluster, Prometheus, Alertmanager or network down),
+        # the external service raises the alarm instead.
+        - receiver: deadman
+          matchers: ['alertname = "Watchdog"']
+          group_wait: 0s
+          group_interval: 1m
+          repeat_interval: 1m
+        # kube-prometheus-stack helper alert: never notify.
         - receiver: "null"
-          matchers: ['alertname =~ "Watchdog|InfoInhibitor"']
+          matchers: ['alertname = "InfoInhibitor"']
         # Informational alerts stay on dashboards.
         - receiver: "null"
           matchers: ['severity =~ "info|none"']
@@ -77,6 +86,10 @@ alertmanager:
             send_resolved: true
             title: '{{ template "discord.title" . }}'
             message: '{{ template "discord.message" . }}'
+      - name: deadman
+        webhook_configs:
+          - url_file: /etc/alertmanager/deadman/ping-url
+            send_resolved: false
     templates:
       - /etc/alertmanager/config/*.tmpl
   templateFiles:
@@ -98,9 +111,16 @@ alertmanager:
         secret:
           secretName: alertmanager-discord
           optional: true
+      - name: deadman
+        secret:
+          secretName: alertmanager-deadman
+          optional: true
     volumeMounts:
       - name: discord
         mountPath: /etc/alertmanager/discord
+        readOnly: true
+      - name: deadman
+        mountPath: /etc/alertmanager/deadman
         readOnly: true
     resources:
       requests: { cpu: 10m, memory: 32Mi }

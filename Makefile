@@ -27,7 +27,7 @@ GRAFANA_PORT ?= 3300
 ARGOCD_PORT  ?= 8380
 
 .PHONY: help check init plan up down creds fmt validate \
-        test-rules discord-secret test-notification local-silences kind-up kind-down context-guard embed-image embed-job argocd grafana-secret status ui-argocd ui-grafana
+        test-rules discord-secret deadman-secret test-notification local-silences kind-up kind-down context-guard embed-image embed-job argocd grafana-secret status ui-argocd ui-grafana
 
 help:
 	@grep -E '^#' Makefile | sed 's/^# \{0,1\}//'
@@ -107,6 +107,7 @@ status:
 
 # --- Alert notifications (Discord) -------------------------------------------
 #   make discord-secret     (store the webhook URL in the cluster; prompts, no echo)
+#   make deadman-secret     (store the healthchecks.io ping URL; prompts, no echo)
 #   make test-notification  (send a test alert through Alertmanager)
 #   make local-silences     (kind only: silence alerts that are false on kind)
 
@@ -125,6 +126,21 @@ discord-secret: context-guard
 	printf '%s' "$$url" | kubectl -n monitoring create secret generic alertmanager-discord \
 		--from-file=webhook-url=/dev/stdin --dry-run=client -o yaml | kubectl apply -f - >/dev/null && \
 	echo "Stored in Secret monitoring/alertmanager-discord. Alertmanager picks it up within about a minute."
+
+# Dead man's switch: the healthchecks.io ping URL for the Watchdog heartbeat.
+deadman-secret: context-guard
+	@printf "healthchecks.io ping URL (input hidden): "; \
+	IFS= read -rs url; echo; \
+	n=$$(printf '%s' "$$url" | grep -o 'https://' | wc -l | tr -d ' '); \
+	if [ "$$n" -gt 1 ]; then \
+		echo "The input contains $$n URLs (pasted more than once?). Paste it exactly once; nothing changed."; exit 1; \
+	fi; \
+	if ! printf '%s' "$$url" | grep -Eq '^https://hc-ping\.com/[A-Za-z0-9_-]+(/[A-Za-z0-9_-]+)?$$'; then \
+		echo "That doesn't look like a single healthchecks.io ping URL (https://hc-ping.com/...); nothing changed."; exit 1; \
+	fi; \
+	printf '%s' "$$url" | kubectl -n monitoring create secret generic alertmanager-deadman \
+		--from-file=ping-url=/dev/stdin --dry-run=client -o yaml | kubectl apply -f - >/dev/null && \
+	echo "Stored in Secret monitoring/alertmanager-deadman. Pings start within about two minutes."
 
 test-notification: context-guard
 	@kubectl -n monitoring port-forward svc/kps-kube-prometheus-stack-alertmanager $(ALERTMANAGER_PORT):9093 >/dev/null 2>&1 & pf=$$!; \

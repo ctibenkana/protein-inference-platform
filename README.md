@@ -117,6 +117,8 @@ runbook. See [docs/slos.md](docs/slos.md) and [docs/runbooks/](docs/runbooks).
 A Grafana dashboard shows SLO status, throughput, padding and job logs.
 Alerts notify a Discord channel by severity, with the runbook link in every
 message; the webhook URL lives only in a Kubernetes Secret.
+A dead man's switch (healthchecks.io) raises the alarm if alerting itself
+stops working.
 
 **Lab data never reaches the logs.** Services must not log protein
 sequences. As a second safeguard, Alloy drops any log line containing a run
@@ -206,6 +208,7 @@ make embed-image  # build the ESM-2 job image
 make embed-job    # run one embedding job, print its summary
 make test-rules   # promtool unit tests for alerts and SLOs, runbook check
 make discord-secret      # store the Discord webhook URL (prompts, no echo)
+make deadman-secret      # store the healthchecks.io ping URL (prompts, no echo)
 make test-notification   # send a test alert through Alertmanager
 make kind-down
 ```

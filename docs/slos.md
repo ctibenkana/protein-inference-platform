@@ -120,10 +120,20 @@ Alertmanager sends alerts to a Discord channel. Routing is in
   just can't deliver.
 - `make test-notification` sends a test alert end to end.
 
+### Dead man's switch
+
+Alerting can't report its own failure. To cover that, the always-firing
+`Watchdog` alert is routed to a healthchecks.io ping URL about once a
+minute. healthchecks.io expects a ping at least every 5 minutes (plus 5
+minutes' grace) and otherwise reports the check DOWN to the same Discord
+channel. That covers Prometheus, Alertmanager, the cluster or its network
+going down. See [the runbook](runbooks/DeadMansSwitch.md).
+
+The ping URL lives only in the Secret `monitoring/alertmanager-deadman`
+(`make deadman-secret`). Pause the check at healthchecks.io before stopping
+the cluster on purpose.
+
 ## Not yet in place
 
-- **Dead man's switch.** If Prometheus or Alertmanager itself goes down,
-  nothing alerts. The always-firing `Watchdog` alert exists for this; it
-  needs an external service that notices when it stops arriving.
 - **Longer windows.** 30-day SLOs need longer retention (or a long-term store);
   7 days matches what Prometheus currently keeps.
