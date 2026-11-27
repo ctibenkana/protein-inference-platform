@@ -90,6 +90,14 @@ Symptom alerts with no SLO behind them:
 kube-prometheus-stack's standard Kubernetes alerts (crash-looping pods, full
 volumes, and so on) remain enabled alongside these.
 
+## Known issues
+
+- **Grafana cold start on a single small node.** When every pod starts at
+  once (after a node or Docker restart), Grafana's health checks can time
+  out and it restarts a few times before settling. Seen on the local
+  cluster; it recovers on its own. A separate startup probe would fix it,
+  but the chart doesn't expose one for the Grafana container.
+
 ## Not yet in place
 
 - **Notifications.** Alerts appear in Prometheus, Alertmanager and Grafana,

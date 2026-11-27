@@ -210,7 +210,7 @@ make kind-down
 
 1. **Foundation** ✅ GCP foundation, network, GKE, CI with lint and security scanning
 2. **GitOps** ✅ Argo CD (self-managed), app of apps, pinned Helm charts, CI rendering and schema validation; verified on a local cluster
-3. **Observability** ✅ Prometheus, Grafana, Loki, Alloy (verified locally); SLOs, alerts and runbooks defined and unit-tested, live check on the local cluster pending
+3. **Observability** ✅ Prometheus, Grafana, Loki, Alloy; SLOs, alerts and runbooks, unit-tested and verified live (a failed job, a heavily padded run and a leaked sequence each raised their alert in Alertmanager)
 4. **Releases** ✅ multi-arch images on GHCR, Sigstore keyless signing, SBOM and provenance, tag-driven releases
 5. **First workloads:** ESM-2 embedding job ✅ (verified on the local cluster, metrics in Prometheus); next, a small model served with vLLM
 6. **Spot GPU pool** for benchmark days, scaling to zero
