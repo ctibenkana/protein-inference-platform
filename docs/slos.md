@@ -98,10 +98,32 @@ volumes, and so on) remain enabled alongside these.
   cluster; it recovers on its own. A separate startup probe would fix it,
   but the chart doesn't expose one for the Grafana container.
 
+## Notifications
+
+Alertmanager sends alerts to a Discord channel. Routing is in
+`deploy/values/kube-prometheus-stack.yaml`:
+
+| Severity | Notified | First message | Repeats while unresolved |
+|---|---|---|---|
+| critical | yes | within about 10 seconds | hourly |
+| warning | yes | after a 30-second grouping window | every 4 hours |
+| info | no (dashboards only) | — | — |
+
+- A resolved message follows each problem.
+- Alerts with the same name and namespace are grouped into one message.
+- A critical alert suppresses the warning for the same problem, and the fast
+  burn-rate alert suppresses the slow one.
+- Every message carries the alert's runbook link.
+- The webhook URL is a secret: it lives only in the Kubernetes Secret
+  `monitoring/alertmanager-discord` (`make discord-secret`, which prompts
+  without echoing). If the Secret is missing, Alertmanager still runs; it
+  just can't deliver.
+- `make test-notification` sends a test alert end to end.
+
 ## Not yet in place
 
-- **Notifications.** Alerts appear in Prometheus, Alertmanager and Grafana,
-  but Alertmanager isn't yet routed to email or chat. That comes with the GKE
-  deployment, when there is someone to notify.
+- **Dead man's switch.** If Prometheus or Alertmanager itself goes down,
+  nothing alerts. The always-firing `Watchdog` alert exists for this; it
+  needs an external service that notices when it stops arriving.
 - **Longer windows.** 30-day SLOs need longer retention (or a long-term store);
   7 days matches what Prometheus currently keeps.
