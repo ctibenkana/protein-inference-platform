@@ -115,10 +115,13 @@ ALERTMANAGER_PORT ?= 9393
 discord-secret: context-guard
 	@printf "Discord webhook URL (input hidden): "; \
 	IFS= read -rs url; echo; \
-	case "$$url" in \
-		https://discord.com/api/webhooks/*|https://discordapp.com/api/webhooks/*) ;; \
-		*) echo "That doesn't look like a Discord webhook URL; nothing changed."; exit 1;; \
-	esac; \
+	n=$$(printf '%s' "$$url" | grep -o 'https://' | wc -l | tr -d ' '); \
+	if [ "$$n" -gt 1 ]; then \
+		echo "The input contains $$n URLs (pasted more than once?). Paste it exactly once; nothing changed."; exit 1; \
+	fi; \
+	if ! printf '%s' "$$url" | grep -Eq '^https://(discord|discordapp)\.com/api/webhooks/[0-9]+/[A-Za-z0-9_-]+$$'; then \
+		echo "That doesn't look like a single Discord webhook URL; nothing changed."; exit 1; \
+	fi; \
 	printf '%s' "$$url" | kubectl -n monitoring create secret generic alertmanager-discord \
 		--from-file=webhook-url=/dev/stdin --dry-run=client -o yaml | kubectl apply -f - >/dev/null && \
 	echo "Stored in Secret monitoring/alertmanager-discord. Alertmanager picks it up within about a minute."
