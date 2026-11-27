@@ -133,6 +133,12 @@ The ping URL lives only in the Secret `monitoring/alertmanager-deadman`
 (`make deadman-secret`). Pause the check at healthchecks.io before stopping
 the cluster on purpose.
 
+**Tested end to end (2026-11-27, kind):** with Docker Desktop stopped, the
+check went DOWN and the Discord alert arrived; after the restart, pings
+resumed within two minutes with no failed sends. A two-minute DNS outage in
+Docker Desktop's resolver during set-up cost a few pings without tripping
+the alarm, which is what the 10-minute tolerance is for.
+
 ## Not yet in place
 
 - **Longer windows.** 30-day SLOs need longer retention (or a long-term store);
