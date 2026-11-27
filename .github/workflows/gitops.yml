@@ -4,13 +4,19 @@ on:
   pull_request:
     paths:
       - "deploy/**"
-      - "scripts/render_apps.py"
+      - "scripts/**"
+      - "tests/prometheus/**"
+      - "docs/runbooks/**"
+      - "Makefile"
       - ".github/workflows/gitops.yml"
   push:
     branches: [main]
     paths:
       - "deploy/**"
-      - "scripts/render_apps.py"
+      - "scripts/**"
+      - "tests/prometheus/**"
+      - "docs/runbooks/**"
+      - "Makefile"
       - ".github/workflows/gitops.yml"
 
 permissions:
@@ -23,6 +29,7 @@ concurrency:
 env:
   HELM_VERSION: "v4.3.2"
   KUBECONFORM_VERSION: "v0.8.0"
+  PROMETHEUS_VERSION: "3.16.0"
   # Custom resource schemas (Argo CD Applications, ServiceMonitors, ...).
   CRD_SCHEMAS: "https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
 
@@ -56,3 +63,27 @@ jobs:
           kubeconform -strict -summary -ignore-missing-schemas \
             -schema-location default -schema-location "$CRD_SCHEMAS" \
             rendered/*.yaml deploy/root.yaml deploy/apps/*.yaml
+
+  alert-rules:
+    name: alert rules (promtool unit tests, runbook links)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: install promtool (checksum-verified)
+        working-directory: /tmp
+        run: |
+          base="https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}"
+          tarball="prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz"
+          curl -fsSLO "${base}/${tarball}"
+          curl -fsSL "${base}/sha256sums.txt" | grep " ${tarball}$" | sha256sum -c -
+          tar -xzf "${tarball}"
+          sudo install "prometheus-${PROMETHEUS_VERSION}.linux-amd64/promtool" /usr/local/bin/
+          promtool --version
+
+      - name: check rules, run unit tests, check runbooks
+        run: |
+          python3 -m pip install --quiet pyyaml==6.0.4
+          make test-rules

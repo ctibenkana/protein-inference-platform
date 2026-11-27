@@ -1,0 +1,15 @@
+# Grafana's dashboard sidecar loads any ConfigMap labelled grafana_dashboard.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: monitoring
+resources:
+  - esm-embed.rules.yaml
+  - platform.rules.yaml
+generatorOptions:
+  disableNameSuffixHash: true
+  labels:
+    grafana_dashboard: "1"
+configMapGenerator:
+  - name: dashboard-esm-embed
+    files:
+      - dashboards/esm-embed.json

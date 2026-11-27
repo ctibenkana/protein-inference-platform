@@ -55,3 +55,8 @@ test:
   enabled: false
 minio:
   enabled: false
+
+# Expose Loki's own metrics to Prometheus.
+monitoring:
+  serviceMonitor:
+    enabled: true

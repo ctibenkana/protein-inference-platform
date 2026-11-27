@@ -1,0 +1,152 @@
+# promtool unit tests for deploy/manifests/observability/platform.rules.yaml
+# Run: make test-rules
+rule_files:
+  - ../../.rules-build/platform.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # --- log pipeline SLI ---------------------------------------------------------
+  - name: pipeline counts as up only when both Alloy and Loki are up
+    interval: 1m
+    input_series:
+      - series: 'up{namespace="monitoring", service="alloy", pod="alloy-1"}'
+        values: "1 1 0 1"
+      - series: 'up{namespace="monitoring", service="loki", pod="loki-0"}'
+        values: "1 1 1 1"
+    promql_expr_test:
+      - expr: logging:up:min
+        eval_time: 1m
+        exp_samples:
+          - labels: 'logging:up:min'
+            value: 1
+      - expr: logging:up:min
+        eval_time: 2m
+        exp_samples:
+          - labels: 'logging:up:min'
+            value: 0
+
+  - name: a component with no scrape target at all counts as down
+    interval: 1m
+    input_series:
+      - series: 'up{namespace="monitoring", service="loki", pod="loki-0"}'
+        values: "1x5"
+    promql_expr_test:
+      - expr: logging:up:min
+        eval_time: 3m
+        exp_samples:
+          - labels: 'logging:up:min'
+            value: 0
+
+  # --- burn-rate alerts -----------------------------------------------------------
+  - name: sustained outage pages (fast burn)
+    interval: 1m
+    input_series:
+      - series: 'up{namespace="monitoring", service="alloy", pod="alloy-1"}'
+        values: "0x80"
+      - series: 'up{namespace="monitoring", service="loki", pod="loki-0"}'
+        values: "1x80"
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: LogPipelineErrorBudgetBurnFast
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              slo: log-pipeline-availability
+            exp_annotations:
+              summary: "Log pipeline is down or flapping (fast error-budget burn)"
+              description: "Alloy or Loki has been down for 100% of the last hour."
+              runbook_url: https://github.com/ctibenkana/protein-inference-platform/blob/main/docs/runbooks/LogPipelineErrorBudgetBurn.md
+
+  - name: a 3-minute blip in an hour does not page
+    interval: 1m
+    input_series:
+      - series: 'up{namespace="monitoring", service="alloy", pod="alloy-1"}'
+        values: "1x30 0 0 0 1x40"
+      - series: 'up{namespace="monitoring", service="loki", pod="loki-0"}'
+        values: "1x75"
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: LogPipelineErrorBudgetBurnFast
+        exp_alerts: []
+
+  - name: healthy pipeline raises nothing
+    interval: 1m
+    input_series:
+      - series: 'up{namespace="monitoring", service="alloy", pod="alloy-1"}'
+        values: "1x400"
+      - series: 'up{namespace="monitoring", service="loki", pod="loki-0"}'
+        values: "1x400"
+    alert_rule_test:
+      - eval_time: 6h
+        alertname: LogPipelineErrorBudgetBurnFast
+        exp_alerts: []
+      - eval_time: 6h
+        alertname: LogPipelineErrorBudgetBurnSlow
+        exp_alerts: []
+
+  # --- data protection ------------------------------------------------------------
+  - name: a dropped sequence-like line raises a critical alert
+    interval: 1m
+    input_series:
+      - series: 'loki_process_dropped_lines_total{component_id="loki.process.redact", reason="possible_protein_sequence"}'
+        values: "0 0 0 1 1 1 1 1"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: PossibleSequenceInLogs
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: PossibleSequenceInLogs
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              component_id: loki.process.redact
+              reason: possible_protein_sequence
+            exp_annotations:
+              summary: "A service logged something that looks like a protein sequence"
+              description: "Alloy dropped 1 log line(s) matching a protein sequence. Nothing was stored, but a service is logging data it must not log."
+              runbook_url: https://github.com/ctibenkana/protein-inference-platform/blob/main/docs/runbooks/PossibleSequenceInLogs.md
+
+  # --- Argo CD ----------------------------------------------------------------------
+  - name: degraded app alerts after 15 minutes; progressing does not
+    interval: 1m
+    input_series:
+      - series: 'argocd_app_info{name="monitoring", health_status="Degraded", sync_status="Synced"}'
+        values: "1x30"
+      - series: 'argocd_app_info{name="loki", health_status="Progressing", sync_status="Synced"}'
+        values: "1x30"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ArgoCDAppUnhealthy
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: ArgoCDAppUnhealthy
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              name: monitoring
+              health_status: Degraded
+              sync_status: Synced
+            exp_annotations:
+              summary: "Argo CD application monitoring is Degraded"
+              description: "The application has not been healthy for 15 minutes."
+              runbook_url: https://github.com/ctibenkana/protein-inference-platform/blob/main/docs/runbooks/ArgoCDAppUnhealthy.md
+
+  - name: out-of-sync app alerts after 30 minutes
+    interval: 1m
+    input_series:
+      - series: 'argocd_app_info{name="inference", health_status="Healthy", sync_status="OutOfSync"}'
+        values: "1x40"
+    alert_rule_test:
+      - eval_time: 31m
+        alertname: ArgoCDAppOutOfSync
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              name: inference
+              health_status: Healthy
+              sync_status: OutOfSync
+            exp_annotations:
+              summary: "Argo CD application inference is out of sync with git"
+              description: "The cluster has not matched git for 30 minutes; the last sync is probably failing."
+              runbook_url: https://github.com/ctibenkana/protein-inference-platform/blob/main/docs/runbooks/ArgoCDAppOutOfSync.md

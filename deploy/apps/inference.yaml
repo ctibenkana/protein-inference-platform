@@ -18,3 +18,12 @@ spec:
     automated:
       prune: true
       selfHeal: true
+    syncOptions:
+      # The PodMonitor CRD arrives with the monitoring app on a fresh cluster.
+      - SkipDryRunOnMissingResource=true
+    retry:
+      limit: 10
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 5m

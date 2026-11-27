@@ -1,0 +1,29 @@
+# SLO recording rules, alert rules and dashboards.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: observability
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/ctibenkana/protein-inference-platform.git
+    targetRevision: main
+    path: deploy/manifests/observability
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      # On a fresh cluster the PrometheusRule CRD arrives with the
+      # monitoring app; don't fail the dry run before it exists.
+      - SkipDryRunOnMissingResource=true
+    retry:
+      limit: 10
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 5m

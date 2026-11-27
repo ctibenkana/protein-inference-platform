@@ -27,7 +27,7 @@ GRAFANA_PORT ?= 3300
 ARGOCD_PORT  ?= 8380
 
 .PHONY: help check init plan up down creds fmt validate \
-        kind-up kind-down context-guard embed-image embed-job argocd grafana-secret status ui-argocd ui-grafana
+        test-rules kind-up kind-down context-guard embed-image embed-job argocd grafana-secret status ui-argocd ui-grafana
 
 help:
 	@grep -E '^#' Makefile | sed 's/^# \{0,1\}//'
@@ -58,6 +58,18 @@ validate:
 		terraform -chdir=$$d init -backend=false -input=false >/dev/null && \
 		terraform -chdir=$$d validate || exit 1; \
 	done
+
+# --- Alert rules ---------------------------------------------------------------
+#   make test-rules  (check syntax, run promtool unit tests, check runbooks)
+#   Needs promtool and Python with PyYAML.
+
+PYTHON ?= python3
+
+test-rules:
+	$(PYTHON) scripts/extract_rules.py .rules-build deploy/manifests/observability/*.rules.yaml
+	promtool check rules .rules-build/*.yaml
+	promtool test rules tests/prometheus/*.test.yaml
+	$(PYTHON) scripts/check_runbooks.py .rules-build/*.yaml
 
 # --- GitOps layer ------------------------------------------------------------
 

@@ -45,6 +45,20 @@ alloy:
       // but if a line contains a long run of amino-acid letters anyway,
       // drop it before it is stored. Drops are counted in Alloy's metrics.
       loki.process "redact" {
+        // Count matches per source (namespace, pod, container labels of the
+        // stream) so an alert can say who logged it. The match is extracted
+        // only to drive the counter; it never becomes a label.
+        stage.regex {
+          expression = "(?P<possible_sequence>[ACDEFGHIKLMNPQRSTVWY]{30,})"
+        }
+        stage.metrics {
+          metric.counter {
+            name        = "possible_sequence_lines_total"
+            description = "Log lines that look like a protein sequence, by source."
+            source      = "possible_sequence"
+            action      = "inc"
+          }
+        }
         stage.drop {
           expression          = "[ACDEFGHIKLMNPQRSTVWY]{30,}"
           drop_counter_reason = "possible_protein_sequence"
@@ -57,3 +71,7 @@ alloy:
           url = "http://loki.monitoring.svc.cluster.local:3100/loki/api/v1/push"
         }
       }
+
+# Expose Alloy's own metrics (dropped lines, write errors) to Prometheus.
+serviceMonitor:
+  enabled: true

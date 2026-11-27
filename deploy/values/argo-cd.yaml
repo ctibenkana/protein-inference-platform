@@ -25,6 +25,11 @@ applicationSet:
   replicas: 0
 
 controller:
+  # Application sync/health metrics (argocd_app_info) for alerting.
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
   resources:
     requests: { cpu: 100m, memory: 384Mi }
     limits: { memory: 768Mi }

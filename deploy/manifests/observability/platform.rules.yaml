@@ -1,0 +1,95 @@
+# SLO and alerts for the platform itself: the log pipeline, lab-data
+# protection in logs, and GitOps delivery. See docs/slos.md.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: platform
+  namespace: monitoring
+spec:
+  groups:
+    # ------------------------------------------- log pipeline availability
+    # SLI: fraction of time in which both Alloy and Loki are up.
+    # Objective: 99.5% over 7 days, alerted with multi-window burn rates.
+    - name: logging.sli
+      rules:
+        # 1 when both are up, 0 otherwise. A component with no scrape
+        # target at all counts as down (the vector(0) fallbacks), so a
+        # deleted Deployment can't look healthy.
+        - record: logging:up:min
+          expr: |
+            min(
+              max by (service) (up{namespace="monitoring", service=~"alloy|loki"})
+              or label_replace(vector(0), "service", "alloy", "", "")
+              or label_replace(vector(0), "service", "loki", "", "")
+            )
+        - record: logging:error_ratio:rate5m
+          expr: 1 - avg_over_time(logging:up:min[5m])
+        - record: logging:error_ratio:rate30m
+          expr: 1 - avg_over_time(logging:up:min[30m])
+        - record: logging:error_ratio:rate1h
+          expr: 1 - avg_over_time(logging:up:min[1h])
+        - record: logging:error_ratio:rate6h
+          expr: 1 - avg_over_time(logging:up:min[6h])
+        - record: logging:availability:7d
+          expr: avg_over_time(logging:up:min[7d])
+
+    - name: logging.slo
+      rules:
+        # Fast burn: at this rate the 7-day error budget is gone in ~12 hours.
+        - alert: LogPipelineErrorBudgetBurnFast
+          expr: |
+            logging:error_ratio:rate1h > (14.4 * 0.005)
+            and logging:error_ratio:rate5m > (14.4 * 0.005)
+          labels:
+            severity: critical
+            slo: log-pipeline-availability
+          annotations:
+            summary: "Log pipeline is down or flapping (fast error-budget burn)"
+            description: "Alloy or Loki has been down for {{ $value | humanizePercentage }} of the last hour."
+            runbook_url: https://github.com/ctibenkana/protein-inference-platform/blob/main/docs/runbooks/LogPipelineErrorBudgetBurn.md
+        # Slow burn: steady degradation that would exhaust the budget in ~1 day.
+        - alert: LogPipelineErrorBudgetBurnSlow
+          expr: |
+            logging:error_ratio:rate6h > (6 * 0.005)
+            and logging:error_ratio:rate30m > (6 * 0.005)
+          labels:
+            severity: warning
+            slo: log-pipeline-availability
+          annotations:
+            summary: "Log pipeline availability is degrading (slow error-budget burn)"
+            description: "Alloy or Loki has been down for {{ $value | humanizePercentage }} of the last 6 hours."
+            runbook_url: https://github.com/ctibenkana/protein-inference-platform/blob/main/docs/runbooks/LogPipelineErrorBudgetBurn.md
+
+    # --------------------------------------------- lab data protection
+    - name: data-protection
+      rules:
+        - alert: PossibleSequenceInLogs
+          expr: increase(loki_process_dropped_lines_total{reason="possible_protein_sequence"}[15m]) > 0
+          labels:
+            severity: critical
+          annotations:
+            summary: "A service logged something that looks like a protein sequence"
+            description: "Alloy dropped {{ $value | humanize }} log line(s) matching a protein sequence. Nothing was stored, but a service is logging data it must not log."
+            runbook_url: https://github.com/ctibenkana/protein-inference-platform/blob/main/docs/runbooks/PossibleSequenceInLogs.md
+
+    # --------------------------------------------------- GitOps delivery
+    - name: argocd
+      rules:
+        - alert: ArgoCDAppUnhealthy
+          expr: argocd_app_info{health_status!~"Healthy|Progressing"} == 1
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Argo CD application {{ $labels.name }} is {{ $labels.health_status }}"
+            description: "The application has not been healthy for 15 minutes."
+            runbook_url: https://github.com/ctibenkana/protein-inference-platform/blob/main/docs/runbooks/ArgoCDAppUnhealthy.md
+        - alert: ArgoCDAppOutOfSync
+          expr: argocd_app_info{sync_status="OutOfSync"} == 1
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Argo CD application {{ $labels.name }} is out of sync with git"
+            description: "The cluster has not matched git for 30 minutes; the last sync is probably failing."
+            runbook_url: https://github.com/ctibenkana/protein-inference-platform/blob/main/docs/runbooks/ArgoCDAppOutOfSync.md

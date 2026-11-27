@@ -1,0 +1,212 @@
+# promtool unit tests for deploy/manifests/observability/esm-embed.rules.yaml
+# Run: make test-rules
+rule_files:
+  - ../../.rules-build/esm-embed.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # --- job success SLO -------------------------------------------------------
+  - name: success SLO breached when 1 of 4 jobs failed (75% < 95%)
+    interval: 1m
+    input_series:
+      - series: 'kube_job_status_succeeded{namespace="inference", job_name="esm-embed-a"}'
+        values: "1x15"
+      - series: 'kube_job_status_succeeded{namespace="inference", job_name="esm-embed-b"}'
+        values: "1x15"
+      - series: 'kube_job_status_succeeded{namespace="inference", job_name="esm-embed-c"}'
+        values: "1x15"
+      - series: 'kube_job_status_failed{namespace="inference", job_name="esm-embed-d"}'
+        values: "1x15"
+    promql_expr_test:
+      - expr: esm_embed:job_success_ratio:7d
+        eval_time: 10m
+        exp_samples:
+          - labels: 'esm_embed:job_success_ratio:7d'
+            value: 0.75
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: EsmEmbedJobSuccessSLOBreached
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              slo: esm-embed-job-success
+            exp_annotations:
+              summary: "Embedding job success below 95% over 7 days"
+              description: "75% of esm-embed jobs succeeded in the last 7 days (objective: 95%)."
+              runbook_url: https://github.com/ctibenkana/protein-inference-platform/blob/main/docs/runbooks/EsmEmbedJobSuccessSLOBreached.md
+
+  - name: success SLO quiet when all jobs succeeded
+    interval: 1m
+    input_series:
+      - series: 'kube_job_status_succeeded{namespace="inference", job_name="esm-embed-a"}'
+        values: "1x15"
+      - series: 'kube_job_status_failed{namespace="inference", job_name="esm-embed-a"}'
+        values: "0x15"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: EsmEmbedJobSuccessSLOBreached
+        exp_alerts: []
+
+  - name: no jobs at all is "no data", not a 0% success rate
+    interval: 1m
+    input_series:
+      - series: 'up{job="unrelated"}'
+        values: "1x15"
+    promql_expr_test:
+      - expr: esm_embed:job_success_ratio:7d
+        eval_time: 10m
+        exp_samples: []
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: EsmEmbedJobSuccessSLOBreached
+        exp_alerts: []
+
+  - name: jobs in other namespaces or with other names are ignored
+    interval: 1m
+    input_series:
+      - series: 'kube_job_status_failed{namespace="default", job_name="esm-embed-x"}'
+        values: "1x15"
+      - series: 'kube_job_status_failed{namespace="inference", job_name="other-job"}'
+        values: "1x15"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: EsmEmbedJobFailed
+        exp_alerts: []
+
+  # --- batching efficiency SLO ----------------------------------------------
+  - name: padding budget uses each pod's final counter value
+    interval: 1m
+    input_series:
+      # Two finished runs; their series stop when the pods go away.
+      - series: 'esm_embed_pad_tokens_total{pod="esm-embed-a-1", strategy="token_budget"}'
+        values: "10 30 50 _x12"
+      - series: 'esm_embed_tokens_computed_total{pod="esm-embed-a-1", strategy="token_budget"}'
+        values: "200 600 1000 _x12"
+      - series: 'esm_embed_pad_tokens_total{pod="esm-embed-b-1", strategy="fixed"}'
+        values: "100 400 _x13"
+      - series: 'esm_embed_tokens_computed_total{pod="esm-embed-b-1", strategy="fixed"}'
+        values: "250 1000 _x13"
+    promql_expr_test:
+      - expr: esm_embed:padding_ratio:7d
+        eval_time: 10m
+        exp_samples:
+          - labels: 'esm_embed:padding_ratio:7d'
+            value: 0.225 # (50 + 400) / (1000 + 1000)
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: EsmEmbedPaddingBudgetExceeded
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              slo: esm-embed-batching-efficiency
+            exp_annotations:
+              summary: "More than 10% of embedding compute spent on padding over 7 days"
+              description: "22.5% of computed tokens were padding in the last 7 days (objective: at most 10%)."
+              runbook_url: https://github.com/ctibenkana/protein-inference-platform/blob/main/docs/runbooks/EsmEmbedPaddingBudgetExceeded.md
+
+  # --- per-job symptoms -------------------------------------------------------
+  - name: failed job alerts immediately
+    interval: 1m
+    input_series:
+      - series: 'kube_job_status_failed{namespace="inference", job_name="esm-embed-x"}'
+        values: "0 0 1 1 1"
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: EsmEmbedJobFailed
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: EsmEmbedJobFailed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: inference
+              job_name: esm-embed-x
+            exp_annotations:
+              summary: "Embedding job esm-embed-x failed"
+              description: "Job esm-embed-x has 1 failed pod(s). Results for this run were not produced."
+              runbook_url: https://github.com/ctibenkana/protein-inference-platform/blob/main/docs/runbooks/EsmEmbedJobFailed.md
+
+  - name: stalled job alerts after 10m without progress plus 5m pending
+    interval: 1m
+    input_series:
+      - series: 'esm_embed_progress_ratio{pod="esm-embed-s-1", strategy="token_budget"}'
+        values: "0.1 0.2 0.3 0.4x30"
+      - series: 'esm_embed_progress_ratio{pod="esm-embed-ok-1", strategy="token_budget"}'
+        values: "0+0.03x30"
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: EsmEmbedJobStalled
+        exp_alerts: [] # stalled since 3m: condition true from 13m
+      - eval_time: 19m
+        alertname: EsmEmbedJobStalled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              pod: esm-embed-s-1
+              strategy: token_budget
+            exp_annotations:
+              summary: "Embedding job in pod esm-embed-s-1 has stopped making progress"
+              description: "No batch has completed for at least 15 minutes (40% done)."
+              runbook_url: https://github.com/ctibenkana/protein-inference-platform/blob/main/docs/runbooks/EsmEmbedJobStalled.md
+
+  - name: finished job is not stalled
+    interval: 1m
+    input_series:
+      - series: 'esm_embed_progress_ratio{pod="esm-embed-done-1", strategy="token_budget"}'
+        values: "0.5 1x30"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: EsmEmbedJobStalled
+        exp_alerts: []
+
+  - name: long-running job alerts only while active
+    interval: 1m
+    input_series:
+      - series: 'kube_job_status_start_time{namespace="inference", job_name="esm-embed-long"}'
+        values: "0x60"
+      - series: 'kube_job_status_active{namespace="inference", job_name="esm-embed-long"}'
+        values: "1x60"
+      - series: 'kube_job_status_start_time{namespace="inference", job_name="esm-embed-done"}'
+        values: "0x60"
+      - series: 'kube_job_status_active{namespace="inference", job_name="esm-embed-done"}'
+        values: "0x60"
+    alert_rule_test:
+      - eval_time: 44m
+        alertname: EsmEmbedJobRunningTooLong
+        exp_alerts: []
+      - eval_time: 46m
+        alertname: EsmEmbedJobRunningTooLong
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: inference
+              job_name: esm-embed-long
+            exp_annotations:
+              summary: "Embedding job esm-embed-long has run for over 45 minutes"
+              description: "Kubernetes stops it at 60 minutes (activeDeadlineSeconds); act before results are lost."
+              runbook_url: https://github.com/ctibenkana/protein-inference-platform/blob/main/docs/runbooks/EsmEmbedJobRunningTooLong.md
+
+  - name: heavily padded run raises an info alert
+    interval: 1m
+    input_series:
+      - series: 'esm_embed_pad_tokens_total{pod="esm-embed-p-1", strategy="fixed"}'
+        values: "300x5"
+      - series: 'esm_embed_tokens_computed_total{pod="esm-embed-p-1", strategy="fixed"}'
+        values: "1000x5"
+      - series: 'esm_embed_pad_tokens_total{pod="esm-embed-q-1", strategy="token_budget"}'
+        values: "50x5"
+      - series: 'esm_embed_tokens_computed_total{pod="esm-embed-q-1", strategy="token_budget"}'
+        values: "1000x5"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: EsmEmbedHighPadding
+        exp_alerts:
+          - exp_labels:
+              severity: info
+              pod: esm-embed-p-1
+              strategy: fixed
+            exp_annotations:
+              summary: "Embedding run in pod esm-embed-p-1 wastes 30% of compute on padding"
+              description: "Batching strategy 'fixed' is padding heavily. Consider --strategy token_budget."
+              runbook_url: https://github.com/ctibenkana/protein-inference-platform/blob/main/docs/runbooks/EsmEmbedHighPadding.md

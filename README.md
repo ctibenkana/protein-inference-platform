@@ -109,6 +109,13 @@ Accepted findings in dev, with reasons:
 All components have explicit resource requests and limits, sized to fit
 together on the single small system node.
 
+**SLOs and alerting.** Three service level objectives (job success, batching
+efficiency as a cost objective, and log pipeline availability with
+multi-window burn-rate alerts), 11 alerts, and a runbook for every alert. The
+rules are unit-tested with `promtool`, and CI fails if an alert has no
+runbook. See [docs/slos.md](docs/slos.md) and [docs/runbooks/](docs/runbooks).
+A Grafana dashboard shows SLO status, throughput, padding and job logs.
+
 **Lab data never reaches the logs.** Services must not log protein
 sequences. As a second safeguard, Alloy drops any log line containing a run
 of 30 or more amino-acid letters before it's stored, and counts the drops.
@@ -137,13 +144,18 @@ deploy/
   values/         Helm values for each chart
   manifests/      plain manifests: namespaces, Pod Security, network policies
   local/kind.yaml local cluster for developing without cloud costs
+  manifests/observability/  SLO recording rules, alerts, Grafana dashboard
+docs/
+  slos.md         objectives, why each target, burn-rate design
+  runbooks/       one runbook per alert
+tests/prometheus/ promtool unit tests for every alert and SLO rule
 workloads/
   esm-embed/      ESM-2 embedding job: code, tests, Dockerfile, Job template
 scripts/
   render_apps.py  renders each application as Argo CD would (used by CI)
 .github/workflows/
   terraform.yml   fmt, validate, tflint, trivy, plan
-  gitops.yml      render charts, validate every object against its schema
+  gitops.yml      render charts, validate every object, test alert rules, check runbooks
   esm-embed.yml   test, multi-arch image build, keyless signing, releases
 Makefile          session and GitOps commands (make help)
 ```
@@ -190,6 +202,7 @@ make ui-grafana   # http://localhost:3300 (prints the admin password)
 make ui-argocd    # http://localhost:8380 (ports overridable: GRAFANA_PORT=, ARGOCD_PORT=)
 make embed-image  # build the ESM-2 job image
 make embed-job    # run one embedding job, print its summary
+make test-rules   # promtool unit tests for alerts and SLOs, runbook check
 make kind-down
 ```
 
@@ -197,7 +210,7 @@ make kind-down
 
 1. **Foundation** ✅ GCP foundation, network, GKE, CI with lint and security scanning
 2. **GitOps** ✅ Argo CD (self-managed), app of apps, pinned Helm charts, CI rendering and schema validation; verified on a local cluster
-3. **Observability:** Prometheus, Grafana, Loki and Alloy ✅ verified (logs reach Loki; sequence-like lines dropped and counted); next come SLOs, alerts and runbooks
+3. **Observability** ✅ Prometheus, Grafana, Loki, Alloy (verified locally); SLOs, alerts and runbooks defined and unit-tested, live check on the local cluster pending
 4. **Releases** ✅ multi-arch images on GHCR, Sigstore keyless signing, SBOM and provenance, tag-driven releases
 5. **First workloads:** ESM-2 embedding job ✅ (verified on the local cluster, metrics in Prometheus); next, a small model served with vLLM
 6. **Spot GPU pool** for benchmark days, scaling to zero
