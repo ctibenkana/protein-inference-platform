@@ -63,13 +63,27 @@ spec:
     # --------------------------------------------- lab data protection
     - name: data-protection
       rules:
+        # Uses Alloy's per-source counter so the alert names the offender.
+        # Alloy creates the series on its first match, already at 1, so
+        # increase() alone misses the first leak; the `unless ... offset`
+        # term catches series that didn't exist 15 minutes ago.
         - alert: PossibleSequenceInLogs
-          expr: increase(loki_process_dropped_lines_total{reason="possible_protein_sequence"}[15m]) > 0
+          expr: |
+            sum by (namespace, pod, container) (
+              # "> 0" matters: a new series' increase is 0, and `or` would
+              # keep that 0 and discard the right-hand side.
+              (increase(loki_process_custom_possible_sequence_lines_total[15m]) > 0)
+              or
+              (
+                loki_process_custom_possible_sequence_lines_total
+                unless loki_process_custom_possible_sequence_lines_total offset 15m
+              )
+            ) > 0
           labels:
             severity: critical
           annotations:
-            summary: "A service logged something that looks like a protein sequence"
-            description: "Alloy dropped {{ $value | humanize }} log line(s) matching a protein sequence. Nothing was stored, but a service is logging data it must not log."
+            summary: "{{ $labels.namespace }}/{{ $labels.pod }} logged something that looks like a protein sequence"
+            description: "Alloy dropped {{ $value | printf \"%.0f\" }} log line(s) from container {{ $labels.container }} matching a protein sequence. Nothing was stored, but this service is logging data it must not log."
             runbook_url: https://github.com/ctibenkana/protein-inference-platform/blob/main/docs/runbooks/PossibleSequenceInLogs.md
 
     # --------------------------------------------------- GitOps delivery

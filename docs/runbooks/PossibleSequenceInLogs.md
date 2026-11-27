@@ -1,6 +1,6 @@
 # PossibleSequenceInLogs
 
-**Severity:** critical · **Source:** `loki_process_dropped_lines_total{reason="possible_protein_sequence"}` (Alloy)
+**Severity:** critical · **Source:** `loki_process_custom_possible_sequence_lines_total` (Alloy, per source stream)
 
 ## Meaning
 A service wrote a log line containing a run of 30 or more amino-acid letters,
@@ -20,12 +20,14 @@ No data has leaked into log storage. But:
 Treat it as a data-protection incident until the cause is found.
 
 ## Diagnose
-1. **Find the source.** Dropped lines aren't stored, but Alloy counts them per
-   source stream (it never records the matched text):
+1. **Find the source.** The alert's `namespace`, `pod` and `container`
+   labels name it. Alloy counts matches per source stream without recording
+   the matched text. For the history across all sources:
    ```promql
    sum by (namespace, pod, container) (increase(loki_process_custom_possible_sequence_lines_total[1h]))
    ```
-   Then read the pod's stored log lines around that time for context:
+   Read the pod's stored log lines around that time for context (the
+   matching lines themselves were dropped):
    ```logql
    {namespace="<namespace>", pod="<pod>"}
    ```

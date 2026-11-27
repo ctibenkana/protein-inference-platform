@@ -86,25 +86,50 @@ tests:
         exp_alerts: []
 
   # --- data protection ------------------------------------------------------------
-  - name: a dropped sequence-like line raises a critical alert
+  - name: first ever match alerts, though the counter is born at 1
+    # Alloy creates the counter series on its first match, so there is no
+    # earlier 0 sample and increase() alone sees nothing (found in the live test).
     interval: 1m
     input_series:
-      - series: 'loki_process_dropped_lines_total{component_id="loki.process.redact", reason="possible_protein_sequence"}'
-        values: "0 0 0 1 1 1 1 1"
+      - series: 'loki_process_custom_possible_sequence_lines_total{component_id="loki.process.redact", namespace="default", pod="leak-test", container="leak-test", app="leak-test"}'
+        values: "_ _ _ 1 1 1 1 1"
     alert_rule_test:
       - eval_time: 2m
         alertname: PossibleSequenceInLogs
         exp_alerts: []
-      - eval_time: 5m
+      - eval_time: 4m
         alertname: PossibleSequenceInLogs
         exp_alerts:
           - exp_labels:
               severity: critical
-              component_id: loki.process.redact
-              reason: possible_protein_sequence
+              namespace: default
+              pod: leak-test
+              container: leak-test
             exp_annotations:
-              summary: "A service logged something that looks like a protein sequence"
-              description: "Alloy dropped 1 log line(s) matching a protein sequence. Nothing was stored, but a service is logging data it must not log."
+              summary: "default/leak-test logged something that looks like a protein sequence"
+              description: "Alloy dropped 1 log line(s) from container leak-test matching a protein sequence. Nothing was stored, but this service is logging data it must not log."
+              runbook_url: https://github.com/ctibenkana/protein-inference-platform/blob/main/docs/runbooks/PossibleSequenceInLogs.md
+
+  - name: a later match on an existing counter alerts
+    interval: 1m
+    input_series:
+      - series: 'loki_process_custom_possible_sequence_lines_total{namespace="inference", pod="esm-embed-x-1", container="esm-embed"}'
+        values: "1x30 2x10"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: PossibleSequenceInLogs
+        exp_alerts: [] # the old match is more than 15 minutes ago
+      - eval_time: 33m
+        alertname: PossibleSequenceInLogs
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              namespace: inference
+              pod: esm-embed-x-1
+              container: esm-embed
+            exp_annotations:
+              summary: "inference/esm-embed-x-1 logged something that looks like a protein sequence"
+              description: "Alloy dropped 1 log line(s) from container esm-embed matching a protein sequence. Nothing was stored, but this service is logging data it must not log."
               runbook_url: https://github.com/ctibenkana/protein-inference-platform/blob/main/docs/runbooks/PossibleSequenceInLogs.md
 
   # --- Argo CD ----------------------------------------------------------------------
