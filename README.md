@@ -11,7 +11,9 @@ be created or destroyed from code in minutes.
 > **Status:** GCP foundation, network and GKE cluster as code, with CI.
 > GitOps and observability layer (Argo CD, Prometheus, Grafana, Loki, Alloy)
 > running and verified on a local cluster; GKE deployment waits on billing.
-> Next: the first inference workloads. See the [roadmap](#roadmap).
+> First workload: [esm-embed](workloads/esm-embed), ESM-2 protein embeddings,
+> where length-aware batching cut padding from 42% to 5% and doubled
+> throughput in a first local run. See the [roadmap](#roadmap).
 
 ## Architecture
 
@@ -135,11 +137,14 @@ deploy/
   values/         Helm values for each chart
   manifests/      plain manifests: namespaces, Pod Security, network policies
   local/kind.yaml local cluster for developing without cloud costs
+workloads/
+  esm-embed/      ESM-2 embedding job: code, tests, Dockerfile, Job template
 scripts/
   render_apps.py  renders each application as Argo CD would (used by CI)
 .github/workflows/
   terraform.yml   fmt, validate, tflint, trivy, plan
   gitops.yml      render charts, validate every object against its schema
+  esm-embed.yml   test, multi-arch image build, keyless signing, releases
 Makefile          session and GitOps commands (make help)
 ```
 
@@ -183,6 +188,8 @@ make argocd       # installs Argo CD; it then syncs everything in deploy/
 make status       # wait until every application is Synced / Healthy
 make ui-grafana   # http://localhost:3300 (prints the admin password)
 make ui-argocd    # http://localhost:8380 (ports overridable: GRAFANA_PORT=, ARGOCD_PORT=)
+make embed-image  # build the ESM-2 job image
+make embed-job    # run one embedding job, print its summary
 make kind-down
 ```
 
@@ -191,8 +198,8 @@ make kind-down
 1. **Foundation** ✅ GCP foundation, network, GKE, CI with lint and security scanning
 2. **GitOps** ✅ Argo CD (self-managed), app of apps, pinned Helm charts, CI rendering and schema validation; verified on a local cluster
 3. **Observability:** Prometheus, Grafana, Loki and Alloy ✅ verified (logs reach Loki; sequence-like lines dropped and counted); next come SLOs, alerts and runbooks
-4. **Releases:** container builds with signed images and versioned releases
-5. **First workloads:** a small model served with vLLM; ESM-2 embedding jobs on the worker pool
+4. **Releases** ✅ multi-arch images on GHCR, Sigstore keyless signing, SBOM and provenance, tag-driven releases
+5. **First workloads:** ESM-2 embedding job ✅ (verified on the local cluster, metrics in Prometheus); next, a small model served with vLLM
 6. **Spot GPU pool** for benchmark days, scaling to zero
 7. **Cost report:** measured monthly cost and cost per benchmark run
 

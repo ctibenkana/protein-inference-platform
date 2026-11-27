@@ -103,7 +103,9 @@ embed-image:
 	docker build -t $(EMBED_IMAGE) workloads/esm-embed
 
 embed-job: context-guard
-	@if [ "$(KCTX)" = "kind-pip-local" ]; then kind load docker-image $(EMBED_IMAGE) --name pip-local; fi
+	@# kind can't see images that only exist locally; load them. Registry images are pulled.
+	@if [ "$(KCTX)" = "kind-pip-local" ] && docker image inspect $(EMBED_IMAGE) >/dev/null 2>&1; then \
+		kind load docker-image $(EMBED_IMAGE) --name pip-local; fi
 	@job=$$(sed 's|image: IMAGE|image: $(EMBED_IMAGE)|' workloads/esm-embed/k8s/job.yaml | kubectl create -f - -o name) && \
 	echo "submitted $$job, waiting for it to finish..." && \
 	kubectl -n inference wait --for=condition=complete $$job --timeout=20m && \
