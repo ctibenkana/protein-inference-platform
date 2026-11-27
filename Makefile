@@ -27,7 +27,7 @@ GRAFANA_PORT ?= 3300
 ARGOCD_PORT  ?= 8380
 
 .PHONY: help check init plan up down creds fmt validate \
-        test-rules kind-up kind-down context-guard embed-image embed-job argocd grafana-secret status ui-argocd ui-grafana
+        test-rules discord-secret test-notification local-silences kind-up kind-down context-guard embed-image embed-job argocd grafana-secret status ui-argocd ui-grafana
 
 help:
 	@grep -E '^#' Makefile | sed 's/^# \{0,1\}//'
@@ -104,6 +104,52 @@ argocd: grafana-secret
 status:
 	@kubectl -n argocd get applications.argoproj.io \
 		-o custom-columns=APP:.metadata.name,SYNC:.status.sync.status,HEALTH:.status.health.status
+
+# --- Alert notifications (Discord) -------------------------------------------
+#   make discord-secret     (store the webhook URL in the cluster; prompts, no echo)
+#   make test-notification  (send a test alert through Alertmanager)
+#   make local-silences     (kind only: silence alerts that are false on kind)
+
+ALERTMANAGER_PORT ?= 9393
+
+discord-secret: context-guard
+	@printf "Discord webhook URL (input hidden): "; \
+	IFS= read -rs url; echo; \
+	case "$$url" in \
+		https://discord.com/api/webhooks/*|https://discordapp.com/api/webhooks/*) ;; \
+		*) echo "That doesn't look like a Discord webhook URL; nothing changed."; exit 1;; \
+	esac; \
+	printf '%s' "$$url" | kubectl -n monitoring create secret generic alertmanager-discord \
+		--from-file=webhook-url=/dev/stdin --dry-run=client -o yaml | kubectl apply -f - >/dev/null && \
+	echo "Stored in Secret monitoring/alertmanager-discord. Alertmanager picks it up within about a minute."
+
+test-notification: context-guard
+	@kubectl -n monitoring port-forward svc/kps-kube-prometheus-stack-alertmanager $(ALERTMANAGER_PORT):9093 >/dev/null 2>&1 & pf=$$!; \
+	sleep 3; \
+	ends=$$(date -u -v+5M +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '+5 min' +%Y-%m-%dT%H:%M:%SZ); \
+	curl -fsS -X POST localhost:$(ALERTMANAGER_PORT)/api/v2/alerts -H 'Content-Type: application/json' -d "[{ \
+		\"labels\": {\"alertname\": \"PlatformNotificationTest\", \"severity\": \"warning\", \"namespace\": \"monitoring\"}, \
+		\"annotations\": {\"summary\": \"Test notification from protein-inference-platform\", \
+			\"description\": \"If you can read this, Alertmanager can reach Discord. It resolves by itself in 5 minutes.\", \
+			\"runbook_url\": \"https://github.com/ctibenkana/protein-inference-platform/blob/main/docs/slos.md\"}, \
+		\"endsAt\": \"$$ends\"}]" && \
+	echo "Test alert sent; expect a Discord message within about 30 seconds, and a resolved message after 5 minutes."; \
+	kill $$pf
+
+# kind nodes run inside Docker and can't see clock sync, so this alert is
+# always false locally. Silenced for 30 days; never applied on GKE.
+local-silences: context-guard
+	@test "$(KCTX)" = "kind-pip-local" || (echo "local-silences is for the kind cluster only" && exit 1)
+	@kubectl -n monitoring port-forward svc/kps-kube-prometheus-stack-alertmanager $(ALERTMANAGER_PORT):9093 >/dev/null 2>&1 & pf=$$!; \
+	sleep 3; \
+	start=$$(date -u +%Y-%m-%dT%H:%M:%SZ); \
+	end=$$(date -u -v+30d +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '+30 days' +%Y-%m-%dT%H:%M:%SZ); \
+	curl -fsS -X POST localhost:$(ALERTMANAGER_PORT)/api/v2/silences -H 'Content-Type: application/json' -d "{ \
+		\"matchers\": [{\"name\": \"alertname\", \"value\": \"NodeClockNotSynchronising\", \"isRegex\": false, \"isEqual\": true}], \
+		\"startsAt\": \"$$start\", \"endsAt\": \"$$end\", \"createdBy\": \"make local-silences\", \
+		\"comment\": \"kind nodes run in Docker and cannot observe clock sync\"}" >/dev/null && \
+	echo "Silenced NodeClockNotSynchronising for 30 days (kind only)."; \
+	kill $$pf
 
 # --- ESM-2 embedding job -----------------------------------------------------
 #   make embed-image  (build the image locally)

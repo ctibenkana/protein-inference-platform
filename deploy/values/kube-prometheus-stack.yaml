@@ -32,7 +32,76 @@ prometheus:
               storage: 10Gi
 
 alertmanager:
+  # Notifications go to Discord. The webhook URL is a secret: it lives only
+  # in the Kubernetes Secret alertmanager-discord (make discord-secret),
+  # mounted as a file. If the Secret is missing, Alertmanager still runs;
+  # it just can't deliver.
+  config:
+    global:
+      resolve_timeout: 5m
+    route:
+      receiver: discord
+      group_by: [alertname, namespace]
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+      routes:
+        # Heartbeat and helper alerts from kube-prometheus-stack: never notify.
+        - receiver: "null"
+          matchers: ['alertname =~ "Watchdog|InfoInhibitor"']
+        # Informational alerts stay on dashboards.
+        - receiver: "null"
+          matchers: ['severity =~ "info|none"']
+        # Critical: notify fast, remind hourly while unresolved.
+        - receiver: discord
+          matchers: ['severity = "critical"']
+          group_wait: 10s
+          repeat_interval: 1h
+    inhibit_rules:
+      # Don't also send the warning for something already critical.
+      - source_matchers: ['severity = "critical"']
+        target_matchers: ['severity =~ "warning|info"']
+        equal: [namespace, alertname]
+      # The fast burn-rate alert covers the slow one.
+      - source_matchers: ['alertname = "LogPipelineErrorBudgetBurnFast"']
+        target_matchers: ['alertname = "LogPipelineErrorBudgetBurnSlow"']
+      # kube-prometheus-stack's InfoInhibitor convention.
+      - source_matchers: ['alertname = "InfoInhibitor"']
+        target_matchers: ['severity = "info"']
+        equal: [namespace]
+    receivers:
+      - name: "null"
+      - name: discord
+        discord_configs:
+          - webhook_url_file: /etc/alertmanager/discord/webhook-url
+            send_resolved: true
+            title: '{{ template "discord.title" . }}'
+            message: '{{ template "discord.message" . }}'
+    templates:
+      - /etc/alertmanager/config/*.tmpl
+  templateFiles:
+    discord.tmpl: |-
+      {{ define "discord.title" -}}
+      [{{ .Status | toUpper }}{{ if eq .Status "firing" }}:{{ .Alerts.Firing | len }}{{ end }}] {{ .CommonLabels.alertname }}{{ with .CommonLabels.severity }} ({{ . }}){{ end }}
+      {{- end }}
+      {{ define "discord.message" -}}
+      {{ range .Alerts -}}
+      {{ if eq .Status "firing" }}🔴{{ else }}✅{{ end }} **{{ .Annotations.summary }}**
+      {{ with .Annotations.description }}{{ . }}
+      {{ end }}{{ with .Annotations.runbook_url }}Runbook: <{{ . }}>
+      {{ end }}
+      {{ end -}}
+      {{- end }}
   alertmanagerSpec:
+    volumes:
+      - name: discord
+        secret:
+          secretName: alertmanager-discord
+          optional: true
+    volumeMounts:
+      - name: discord
+        mountPath: /etc/alertmanager/discord
+        readOnly: true
     resources:
       requests: { cpu: 10m, memory: 32Mi }
       limits: { memory: 128Mi }

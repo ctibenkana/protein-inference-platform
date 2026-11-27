@@ -11,7 +11,10 @@ spec:
   groups:
     # ------------------------------------------------------------------ SLIs
     - name: esm-embed.sli
-      interval: 5m
+      # Must stay well under Prometheus' 5-minute lookback: at 5m, the
+      # recorded series disappeared from instant queries just before each
+      # evaluation (seen live), so dashboards and the SLO alert flickered.
+      interval: 1m
       rules:
         # A job counts once if it ever reported success / failure in 7 days.
         - record: esm_embed:jobs_succeeded:7d
@@ -39,7 +42,10 @@ spec:
 
     # ---------------------------------------------------------------- SLOs
     - name: esm-embed.slo
-      interval: 5m
+      # Must stay well under Prometheus' 5-minute lookback: at 5m, the
+      # recorded series disappeared from instant queries just before each
+      # evaluation (seen live), so dashboards and the SLO alert flickered.
+      interval: 1m
       rules:
         - alert: EsmEmbedJobSuccessSLOBreached
           expr: esm_embed:job_success_ratio:7d < 0.95
