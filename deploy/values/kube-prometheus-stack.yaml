@@ -125,6 +125,16 @@ alertmanager:
     resources:
       requests: { cpu: 10m, memory: 32Mi }
       limits: { memory: 128Mi }
+    # Silences and notification history live on disk. Without a volume they
+    # were lost when the pod was recreated (seen after a Docker restart),
+    # and alerts silenced on purpose came back.
+    storage:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 1Gi
 
 prometheusOperator:
   resources:
