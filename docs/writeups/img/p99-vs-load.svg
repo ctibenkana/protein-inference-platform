@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 420" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="13">
+<title>p99 latency against offered load, FIFO vs length-aware batching</title>
+<rect width="720" height="420" fill="#ffffff"/>
+<text x="70" y="28" font-size="15" font-weight="600" fill="#111827">p99 latency vs. offered load (log scale)</text>
+<line x1="70" x2="690" y1="360.0" y2="360.0" stroke="#e5e7eb"/>
+<text x="62" y="364.0" text-anchor="end" fill="#4b5563">0.1 s</text>
+<line x1="70" x2="690" y1="303.2" y2="303.2" stroke="#e5e7eb"/>
+<text x="62" y="307.2" text-anchor="end" fill="#4b5563">0.3 s</text>
+<line x1="70" x2="690" y1="240.9" y2="240.9" stroke="#e5e7eb"/>
+<text x="62" y="244.9" text-anchor="end" fill="#4b5563">1 s</text>
+<line x1="70" x2="690" y1="184.0" y2="184.0" stroke="#e5e7eb"/>
+<text x="62" y="188.0" text-anchor="end" fill="#4b5563">3 s</text>
+<line x1="70" x2="690" y1="121.7" y2="121.7" stroke="#e5e7eb"/>
+<text x="62" y="125.7" text-anchor="end" fill="#4b5563">10 s</text>
+<line x1="70" x2="690" y1="64.9" y2="64.9" stroke="#e5e7eb"/>
+<text x="62" y="68.9" text-anchor="end" fill="#4b5563">30 s</text>
+<line x1="70.0" x2="70.0" y1="50" y2="360" stroke="#f3f4f6"/>
+<text x="70.0" y="380" text-anchor="middle" fill="#4b5563">0</text>
+<line x1="166.9" x2="166.9" y1="50" y2="360" stroke="#f3f4f6"/>
+<text x="166.9" y="380" text-anchor="middle" fill="#4b5563">5</text>
+<line x1="263.8" x2="263.8" y1="50" y2="360" stroke="#f3f4f6"/>
+<text x="263.8" y="380" text-anchor="middle" fill="#4b5563">10</text>
+<line x1="360.6" x2="360.6" y1="50" y2="360" stroke="#f3f4f6"/>
+<text x="360.6" y="380" text-anchor="middle" fill="#4b5563">15</text>
+<line x1="457.5" x2="457.5" y1="50" y2="360" stroke="#f3f4f6"/>
+<text x="457.5" y="380" text-anchor="middle" fill="#4b5563">20</text>
+<line x1="554.4" x2="554.4" y1="50" y2="360" stroke="#f3f4f6"/>
+<text x="554.4" y="380" text-anchor="middle" fill="#4b5563">25</text>
+<line x1="651.2" x2="651.2" y1="50" y2="360" stroke="#f3f4f6"/>
+<text x="651.2" y="380" text-anchor="middle" fill="#4b5563">30</text>
+<text x="380.0" y="405" text-anchor="middle" fill="#374151">offered load (requests per second, one protein each)</text>
+<line x1="70" x2="690" y1="360" y2="360" stroke="#9ca3af"/>
+<line x1="70" x2="70" y1="50" y2="360" stroke="#9ca3af"/>
+<line x1="70" x2="690" y1="240.9" y2="240.9" stroke="#16a34a" stroke-dasharray="6 4" stroke-width="1.5"/>
+<text x="686" y="234.9" text-anchor="end" fill="#15803d">latency objective: 1 s</text>
+<line x1="70" x2="690" y1="64.9" y2="64.9" stroke="#9ca3af" stroke-dasharray="2 4"/>
+<text x="686" y="58.9" text-anchor="end" fill="#6b7280">request deadline: 30 s</text>
+<path d="M166.9,150.3 L263.8,112.5 L360.6,64.9 L457.5,65.0 L554.4,73.9 L651.2,76.8" fill="none" stroke="#c2410c" stroke-width="2.5"/>
+<circle cx="166.9" cy="150.3" r="5" fill="#c2410c" stroke="#c2410c" stroke-width="2"/>
+<circle cx="263.8" cy="112.5" r="5" fill="#c2410c" stroke="#c2410c" stroke-width="2"/>
+<circle cx="360.6" cy="64.9" r="5" fill="#ffffff" stroke="#c2410c" stroke-width="2"/>
+<text x="360.6" y="84.9" text-anchor="middle" font-size="11" fill="#c2410c">46% failed</text>
+<circle cx="457.5" cy="65.0" r="5" fill="#ffffff" stroke="#c2410c" stroke-width="2"/>
+<text x="457.5" y="85.0" text-anchor="middle" font-size="11" fill="#c2410c">34% failed</text>
+<circle cx="554.4" cy="73.9" r="5" fill="#ffffff" stroke="#c2410c" stroke-width="2"/>
+<text x="554.4" y="93.9" text-anchor="middle" font-size="11" fill="#c2410c">17% failed</text>
+<circle cx="651.2" cy="76.8" r="5" fill="#ffffff" stroke="#c2410c" stroke-width="2"/>
+<text x="651.2" y="96.8" text-anchor="middle" font-size="11" fill="#c2410c">31% failed</text>
+<line x1="86" x2="110" y1="308.60888398616794" y2="308.60888398616794" stroke="#c2410c" stroke-width="2.5"/>
+<text x="118" y="312.60888398616794" fill="#111827">FIFO batching</text>
+<path d="M166.9,254.8 L263.8,272.0 L360.6,298.0 L457.5,260.8 L554.4,210.8 L651.2,152.0" fill="none" stroke="#1d4ed8" stroke-width="2.5"/>
+<circle cx="166.9" cy="254.8" r="5" fill="#1d4ed8" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="263.8" cy="272.0" r="5" fill="#1d4ed8" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="360.6" cy="298.0" r="5" fill="#1d4ed8" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="457.5" cy="260.8" r="5" fill="#1d4ed8" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="554.4" cy="210.8" r="5" fill="#1d4ed8" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="651.2" cy="152.0" r="5" fill="#1d4ed8" stroke="#1d4ed8" stroke-width="2"/>
+<line x1="86" x2="110" y1="328.60888398616794" y2="328.60888398616794" stroke="#1d4ed8" stroke-width="2.5"/>
+<text x="118" y="332.60888398616794" fill="#111827">Length-aware batching</text>
+<text x="86" y="352.60888398616794" font-size="11" fill="#6b7280">hollow marker: some requests also timed out or were refused</text>
+</svg>

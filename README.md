@@ -19,6 +19,12 @@ be created or destroyed from code in minutes.
 > same latency, with availability and latency SLOs, burn-rate alerts and
 > runbooks. See the [roadmap](#roadmap).
 
+## Write-ups
+
+- [Why FIFO batching collapses: a padding feedback loop in protein-model serving](docs/writeups/fifo-batching-collapse.md):
+  length-aware batching carries 3–4× the load of FIFO at the same latency,
+  and why FIFO's padding turns load into more load.
+
 ## Architecture
 
 ```
