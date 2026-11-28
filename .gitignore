@@ -37,3 +37,6 @@ credentials*.json
 .DS_Store
 .idea/
 .vscode/
+
+# Rust build output
+/services/*/target/
