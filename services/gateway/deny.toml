@@ -1,0 +1,35 @@
+# cargo-deny: what the gateway may depend on. Checked in CI on every change
+# and daily, since new advisories appear without any change here.
+
+[graph]
+# The image's targets, plus macOS for local development.
+targets = [
+  "x86_64-unknown-linux-musl",
+  "aarch64-unknown-linux-musl",
+  "aarch64-apple-darwin",
+]
+
+[advisories]
+# Any RustSec advisory affecting the dependency graph fails the check, and
+# so does a yanked version. Exceptions go in `ignore`, each with a reason.
+yanked = "deny"
+ignore = []
+
+[licenses]
+# Compatible with this project's Apache-2.0 licence. A crate offering a
+# choice ("MIT OR Apache-2.0") passes if any option is allowed.
+allow = ["MIT", "Apache-2.0", "BSD-3-Clause", "Unicode-3.0"]
+confidence-threshold = 0.93
+
+[licenses.private]
+# This crate isn't published; its own licence is in Cargo.toml.
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+# crates.io only: no other registries, no git dependencies.
+unknown-registry = "deny"
+unknown-git = "deny"

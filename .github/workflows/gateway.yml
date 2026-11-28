@@ -1,8 +1,9 @@
 name: gateway
 
-# Format, lint and test on every change; on main, publishes a signed
-# multi-arch image tagged with the commit; on a tag gateway-vX.Y.Z, also
-# publishes X.Y.Z.
+# Format, lint, test and check dependencies (cargo-deny) on every change;
+# on main, publishes a signed multi-arch image tagged with the commit; on a
+# tag gateway-vX.Y.Z, also publishes X.Y.Z. Dependencies are re-checked
+# daily, because new advisories appear without any change here.
 
 on:
   pull_request:
@@ -15,6 +16,8 @@ on:
       - "services/gateway/**"
       - ".github/workflows/gateway.yml"
     tags: ["gateway-v*"]
+  schedule:
+    - cron: "17 6 * * *" # daily dependency check
 
 permissions:
   contents: read
@@ -26,13 +29,41 @@ concurrency:
 env:
   IMAGE: ghcr.io/${{ github.repository_owner }}/gateway
   CARGO_TERM_COLOR: always
+  CARGO_DENY_VERSION: "0.20.2"
 
 defaults:
   run:
     working-directory: services/gateway
 
 jobs:
+  dependencies:
+    name: dependencies (cargo-deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: install cargo-deny (checksum-verified)
+        working-directory: /tmp
+        run: |
+          base="https://github.com/EmbarkStudios/cargo-deny/releases/download/${CARGO_DENY_VERSION}"
+          name="cargo-deny-${CARGO_DENY_VERSION}-x86_64-unknown-linux-musl"
+          curl -fsSLO "${base}/${name}.tar.gz"
+          echo "$(curl -fsSL "${base}/${name}.tar.gz.sha256" | cut -d' ' -f1)  ${name}.tar.gz" | sha256sum -c -
+          tar -xzf "${name}.tar.gz"
+          sudo install "${name}/cargo-deny" /usr/local/bin/
+          cargo-deny --version
+
+      - name: toolchain
+        run: rustup toolchain install
+
+      # Advisories (RustSec), licences, banned crates and sources; see deny.toml.
+      - name: check
+        run: cargo deny check
+
   test:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -53,7 +84,8 @@ jobs:
         run: cargo test --locked
 
   image:
-    needs: test
+    if: github.event_name != 'schedule'
+    needs: [test, dependencies]
     runs-on: ubuntu-latest
     permissions:
       contents: read
