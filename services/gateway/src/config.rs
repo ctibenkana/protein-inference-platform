@@ -21,7 +21,7 @@ pub struct Config {
     #[arg(long, env = "GATEWAY_METRICS_LISTEN", default_value = "0.0.0.0:9100")]
     pub metrics_listen: SocketAddr,
 
-    /// Base URL of the model server, e.g. http://esm-embed-server:8000
+    /// Base URL of the model server, e.g. http://127.0.0.1:8000 (same pod)
     #[arg(long, env = "GATEWAY_BACKEND_URL")]
     pub backend_url: String,
 
