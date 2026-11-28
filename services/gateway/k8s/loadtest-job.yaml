@@ -1,0 +1,48 @@
+# One in-cluster load test against the deployed gateway. Submitted on demand
+# (make loadtest), not synced by Argo CD. IMAGE, RATES and DURATION are
+# substituted at submit time; IMAGE is the deployed gateway's own image.
+# The load generator sends synthetic sequences only (real lengths, random
+# letters), so no research data is involved.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: loadtest-
+  namespace: inference
+  labels:
+    app.kubernetes.io/name: loadgen
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 3600
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: loadgen
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: loadgen
+          image: IMAGE
+          command: ["/loadgen"]
+          args:
+            - --url=http://gateway/v1/embeddings
+            - --rates=RATES
+            - --duration=DURATION
+            - --warmup=10
+            - --cooldown=15
+            - --label=in-cluster
+          resources:
+            requests: { cpu: 100m, memory: 64Mi }
+            limits: { memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]

@@ -32,15 +32,19 @@ RUN mkdir src && echo 'fn main() {}' > src/main.rs && touch src/lib.rs \
 COPY src src
 RUN touch src/main.rs src/lib.rs \
  && cargo build --release --locked --target "$(cat /target)" \
- && cp "target/$(cat /target)/release/gateway" /gateway
+ && cp "target/$(cat /target)/release/gateway" /gateway \
+ && cp "target/$(cat /target)/release/loadgen" /loadgen
 
 # --- runtime ----------------------------------------------------------------
 FROM ${RUNTIME_IMAGE}
 LABEL org.opencontainers.image.title="gateway" \
-      org.opencontainers.image.description="Inference gateway for protein embeddings" \
+      org.opencontainers.image.description="Inference gateway for protein embeddings, with its load generator" \
       org.opencontainers.image.licenses="Apache-2.0"
 
 COPY --from=build /gateway /gateway
+# The load generator ships in the same image, so a load test always matches
+# the gateway version it measures (run it with --entrypoint /loadgen).
+COPY --from=build /loadgen /loadgen
 # distroless "nonroot" user, numeric so Kubernetes can verify runAsNonRoot.
 USER 65532:65532
 # 8080: API; 9100: metrics

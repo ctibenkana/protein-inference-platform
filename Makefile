@@ -11,6 +11,7 @@
 #   make status    (list Argo CD applications and their health)
 #   make ui-argocd / make ui-grafana   (open the UIs via port-forward)
 #   make gateway-demo  (call the embeddings API on the cluster)
+#   make loadtest      (open-loop load test in the cluster)
 #   make kind-down (local only: delete the kind cluster)
 
 ENV_DIR := infra/envs/dev
@@ -28,7 +29,7 @@ GRAFANA_PORT ?= 3300
 ARGOCD_PORT  ?= 8380
 
 .PHONY: help check init plan up down creds fmt validate \
-        test-rules discord-secret deadman-secret test-notification local-silences gateway-demo kind-up kind-down context-guard embed-image embed-job argocd grafana-secret status ui-argocd ui-grafana
+        test-rules discord-secret deadman-secret test-notification local-silences gateway-demo loadtest kind-up kind-down context-guard embed-image embed-job argocd grafana-secret status ui-argocd ui-grafana
 
 help:
 	@grep -E '^#' Makefile | sed 's/^# \{0,1\}//'
@@ -201,6 +202,20 @@ gateway-demo: context-guard
 		-d '{"sequences": ["MKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQ", "MSEQNNTEMTFQIQRIYTKDISFEAPNAPHVFQKDW"]}' | \
 	python3 scripts/show_embeddings.py; \
 	kill $$pf
+
+# Open-loop load test in the cluster, with the load generator from the
+# deployed gateway image, e.g.  make loadtest LOADTEST_RATES=5,10,20
+LOADTEST_RATES ?= 2,4,8
+LOADTEST_DURATION ?= 60
+GATEWAY_IMAGE = $(shell sed -n 's/^ *image: \(ghcr.io[^ ]*gateway@sha256:[0-9a-f]*\).*/\1/p' deploy/manifests/inference/gateway.yaml)
+
+loadtest: context-guard
+	@test -n "$(GATEWAY_IMAGE)" || (echo "gateway image not found in deploy/manifests/inference/gateway.yaml" && exit 1)
+	@job=$$(sed -e 's|image: IMAGE|image: $(GATEWAY_IMAGE)|' -e 's|=RATES|=$(LOADTEST_RATES)|' -e 's|=DURATION|=$(LOADTEST_DURATION)|' \
+		services/gateway/k8s/loadtest-job.yaml | kubectl create -f - -o name) && \
+	echo "submitted $$job (rates $(LOADTEST_RATES) req/s, $(LOADTEST_DURATION) s each); waiting..." && \
+	kubectl -n inference wait --for=condition=complete $$job --timeout=60m >/dev/null && \
+	kubectl -n inference logs $$job
 
 ui-argocd:
 	@echo "Argo CD: http://localhost:$(ARGOCD_PORT)  user: admin  password:"
