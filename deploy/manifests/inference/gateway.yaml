@@ -22,8 +22,9 @@ spec:
       labels: *labels
     spec:
       automountServiceAccountToken: false
-      # The gateway fails readiness on SIGTERM, keeps serving for
-      # --shutdown-delay while endpoints update, then drains.
+      # On SIGTERM the gateway fails readiness, keeps serving for the
+      # shutdown delay (5 s) while endpoints update, then drains for at most
+      # the drain timeout (30 s). 5 + 30 stays below the 45 s grace period.
       terminationGracePeriodSeconds: 45
       securityContext:
         runAsNonRoot: true
@@ -40,10 +41,13 @@ spec:
               app.kubernetes.io/name: gateway
       containers:
         - name: gateway
-          image: ghcr.io/ctibenkana/gateway@sha256:59fddd9611cfc4f64e5dfccc07e58054437155effb629e2a4af82dbb0b4488fe # sha-1b9efcd
+          image: ghcr.io/ctibenkana/gateway@sha256:afec210e42079e83627ec129f5dab059371c47fd0f6c3301b71bcb0defc260d1 # sha-2a32cfc
           env:
             - { name: GATEWAY_BACKEND_URL, value: "http://esm-embed-server:8000" }
             - { name: GATEWAY_SHUTDOWN_DELAY, value: "5" }
+            - { name: GATEWAY_DRAIN_TIMEOUT, value: "30" }
+            # About 8 full batches; set from the load test in step 5.
+            - { name: GATEWAY_MAX_QUEUE_TOKENS, value: "131072" }
           ports:
             - { name: http, containerPort: 8080 }
             - { name: metrics, containerPort: 9100 }
