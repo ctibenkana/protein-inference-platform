@@ -1,0 +1,136 @@
+# Embedding service: the gateway and the ESM-2 model server in one pod.
+# Design: docs/design/gateway.md
+#
+# One gateway per model server, by construction. Load tests showed that two
+# independent gateways in front of one model server made the slowest 1% of
+# requests 3-4x slower (docs/benchmarks/gateway-load-tests.md): each batched
+# half the traffic on its own, and their batches then queued first-come,
+# first-served inside the model server. Scaling out adds both together.
+#
+# The model server is a native sidecar (an init container with
+# restartPolicy: Always): it starts before the gateway, and the gateway
+# starts only once the model has loaded; on shutdown the gateway drains
+# first and the model server stops after it. It listens on 127.0.0.1 only,
+# so nothing outside the pod can reach it.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: embedding-service
+  namespace: inference
+  labels: &labels
+    app.kubernetes.io/name: embedding-service
+    app.kubernetes.io/part-of: embedding-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: embedding-service
+  strategy:
+    rollingUpdate:
+      maxSurge: 1 # the new pod loads its model before the old one drains
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels: *labels
+    spec:
+      automountServiceAccountToken: false
+      # Gateway: 5 s delay + up to 30 s drain; then the model server stops.
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: model-server
+          restartPolicy: Always # native sidecar
+          image: ghcr.io/ctibenkana/esm-embed@sha256:fed8769cc70824b63de524299c9a1ab4048d444f670215944c93ece86becd913 # sha-ec008a5
+          command: ["esm-embed-server"]
+          args:
+            - --host=127.0.0.1 # API on localhost only
+            - --port=8000
+            - --metrics-port=9100 # metrics on the pod IP, for Prometheus
+            - --threads=2 # match the CPU request; more threads only contend
+          ports:
+            - { name: metrics, containerPort: 9100 }
+          # The API is on localhost, which the kubelet can't reach, so the
+          # probes run inside the container.
+          startupProbe:
+            exec:
+              command: ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=3)"]
+            periodSeconds: 2
+            failureThreshold: 90 # up to 3 minutes to load the model
+          readinessProbe:
+            exec:
+              command: ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=3)"]
+            periodSeconds: 10
+            timeoutSeconds: 4
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command: ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=5)"]
+            periodSeconds: 20
+            timeoutSeconds: 6
+            failureThreshold: 3
+          resources:
+            requests: { cpu: "2", memory: 1Gi }
+            limits: { memory: 2Gi } # no CPU limit: throttling only adds latency
+          securityContext:
+            runAsUser: 10001
+            runAsGroup: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      containers:
+        - name: gateway
+          image: ghcr.io/ctibenkana/gateway@sha256:9bf2691e54e6b2c0288e2fa28368004b27381ec184b6c8234b47acfb8c25d03c # sha-c947895
+          env:
+            - { name: GATEWAY_BACKEND_URL, value: "http://127.0.0.1:8000" }
+            - { name: GATEWAY_METRICS_LISTEN, value: "0.0.0.0:9101" } # 9100 is the model server's
+            - { name: GATEWAY_SHUTDOWN_DELAY, value: "5" }
+            - { name: GATEWAY_DRAIN_TIMEOUT, value: "30" }
+            # About 1.2 s of work on the load-test machine; see
+            # docs/benchmarks/gateway-load-tests.md (E2).
+            - { name: GATEWAY_MAX_QUEUE_TOKENS, value: "16384" }
+          ports:
+            - { name: http, containerPort: 8080 }
+            - { name: gateway-metrics, containerPort: 9101 }
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 5
+            failureThreshold: 2
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            requests: { cpu: 50m, memory: 32Mi }
+            limits: { memory: 128Mi }
+          securityContext:
+            runAsUser: 65532
+            runAsGroup: 65532
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+# Clients keep using the name "gateway".
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway
+  namespace: inference
+  labels:
+    app.kubernetes.io/name: embedding-service
+    app.kubernetes.io/part-of: embedding-service
+spec:
+  selector:
+    app.kubernetes.io/name: embedding-service
+  ports:
+    - { name: http, port: 80, targetPort: http }

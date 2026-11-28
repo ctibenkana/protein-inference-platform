@@ -207,10 +207,10 @@ gateway-demo: context-guard
 # deployed gateway image, e.g.  make loadtest LOADTEST_RATES=5,10,20
 LOADTEST_RATES ?= 2,4,8
 LOADTEST_DURATION ?= 60
-GATEWAY_IMAGE = $(shell sed -n 's/^ *image: \(ghcr.io[^ ]*gateway@sha256:[0-9a-f]*\).*/\1/p' deploy/manifests/inference/gateway.yaml)
+GATEWAY_IMAGE = $(shell sed -n 's/^ *image: \(ghcr.io[^ ]*gateway@sha256:[0-9a-f]*\).*/\1/p' deploy/manifests/inference/embedding-service.yaml)
 
 loadtest: context-guard
-	@test -n "$(GATEWAY_IMAGE)" || (echo "gateway image not found in deploy/manifests/inference/gateway.yaml" && exit 1)
+	@test -n "$(GATEWAY_IMAGE)" || (echo "gateway image not found in deploy/manifests/inference/embedding-service.yaml" && exit 1)
 	@job=$$(sed -e 's|image: IMAGE|image: $(GATEWAY_IMAGE)|' -e 's|=RATES|=$(LOADTEST_RATES)|' -e 's|=DURATION|=$(LOADTEST_DURATION)|' \
 		services/gateway/k8s/loadtest-job.yaml | kubectl create -f - -o name) && \
 	echo "submitted $$job (rates $(LOADTEST_RATES) req/s, $(LOADTEST_DURATION) s each); waiting..." && \
