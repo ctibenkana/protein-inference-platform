@@ -38,6 +38,12 @@ spec:
             - --warmup=10
             - --cooldown=15
             - --label=in-cluster
+          env:
+            # The synthetic "loadtest" caller's key (make loadtest creates it);
+            # its traffic is left out of the SLOs.
+            - name: LOADGEN_API_KEY
+              valueFrom:
+                secretKeyRef: { name: gateway-loadtest-key, key: api-key }
           resources:
             requests: { cpu: 100m, memory: 64Mi }
             limits: { memory: 256Mi }

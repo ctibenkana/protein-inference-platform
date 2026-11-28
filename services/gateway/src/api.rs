@@ -4,7 +4,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use axum::Router;
 use axum::body::Bytes;
 use axum::extract::rejection::BytesRejection;
 use axum::extract::{DefaultBodyLimit, Request, State};
@@ -12,13 +11,15 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
+use axum::{Extension, Router};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
 use serde::{Deserialize, Serialize};
 use tokio::time::Instant;
 
+use crate::auth::{Caller, Callers, Defaults, Refusal};
 use crate::backend::{Backend, BackendError};
-use crate::metrics::{CodeLabel, DropLabel, Metrics};
+use crate::metrics::{CallerCodeLabel, CallerLabel, DropLabel, Metrics, RequestLabel};
 use crate::scheduler::{self, Row, Scheduler};
 use crate::validate::{self, Invalid, Limits};
 
@@ -49,6 +50,12 @@ pub struct AppState {
     pub scheduler: Scheduler,
     /// Set on SIGTERM: readiness fails so Kubernetes stops routing here.
     pub shutting_down: AtomicBool,
+    /// API keys and per-caller quotas.
+    pub callers: Arc<Callers>,
+    /// Requests without an Authorization header are served as "anonymous"
+    /// (local development only).
+    pub allow_anonymous: bool,
+    anonymous: Arc<Caller>,
 }
 
 impl AppState {
@@ -60,19 +67,39 @@ impl AppState {
         batching: scheduler::Config,
     ) -> Self {
         let metrics = Arc::new(Metrics::new(batching.policy.as_str()));
+        // Without with_auth: anonymous use, effectively unlimited (tests).
+        let open = Defaults {
+            residues_per_minute: u64::MAX / 4,
+            max_inflight_tokens: usize::MAX / 4,
+            largest_request_residues: 0,
+            largest_request_tokens: 0,
+        };
         Self {
             limits,
             timeouts,
             scheduler: Scheduler::start(backend, batching, metrics.clone()),
             metrics,
             shutting_down: AtomicBool::new(false),
+            callers: Arc::new(Callers::new(None, open)),
+            allow_anonymous: true,
+            anonymous: Caller::anonymous(&open),
         }
+    }
+
+    /// Requires API keys from `callers`, unless `allow_anonymous`.
+    pub fn with_auth(mut self, callers: Arc<Callers>, allow_anonymous: bool) -> Self {
+        self.anonymous = Caller::anonymous(callers.defaults());
+        self.callers = callers;
+        self.allow_anonymous = allow_anonymous;
+        self
     }
 }
 
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/v1/embeddings", post(embeddings))
+        // Layers wrap outwards: observe sees every request, including 401s.
+        .route_layer(middleware::from_fn_with_state(state.clone(), authenticate))
         .route_layer(middleware::from_fn_with_state(state.clone(), observe))
         .route("/healthz", get(|| async { "ok" }))
         .route("/readyz", get(readyz))
@@ -250,6 +277,7 @@ fn request_timeout(headers: &HeaderMap, t: &Timeouts) -> Result<Duration, ApiErr
 
 async fn embeddings(
     State(s): State<Arc<AppState>>,
+    Extension(caller): Extension<Arc<Caller>>,
     headers: HeaderMap,
     body: Result<Bytes, BytesRejection>,
 ) -> Result<Response, ApiError> {
@@ -267,9 +295,16 @@ async fn embeddings(
         sequences: req.sequences.len(),
         residues,
     };
+    // The caller's own limits first (429), then the shared queue (503).
+    let tokens = residues + validate::SPECIAL_TOKENS * req.sequences.len();
+    let _in_flight = caller.reserve(tokens).map_err(|r| refused(&s, r))?;
+    caller
+        .take(residues as u64, std::time::Instant::now())
+        .map_err(|r| refused(&s, r))?;
     // Refuse now rather than queue work that would wait too long: a fast
     // 503 lets the caller back off or go elsewhere.
     if s.scheduler.admit(&req.sequences).is_err() {
+        caller.refund(residues as u64); // not the caller's doing
         s.metrics
             .rejected
             .get_or_create(&DropLabel {
@@ -328,6 +363,30 @@ async fn embeddings(
     Ok(resp)
 }
 
+/// A request refused by the caller's own limits.
+fn refused(s: &AppState, r: Refusal) -> ApiError {
+    let (reason, retry, message) = match r {
+        Refusal::RateLimited { retry_after_secs } => (
+            "rate_limited",
+            retry_after_secs,
+            format!("this API key's allowance of residues per minute is used up; retry in {retry_after_secs} s"),
+        ),
+        Refusal::TooMuchInFlight => (
+            "caller_in_flight",
+            1,
+            "this API key already has its maximum work in progress; wait for earlier requests to finish".to_string(),
+        ),
+    };
+    s.metrics
+        .rejected
+        .get_or_create(&DropLabel { reason })
+        .inc();
+    ApiError {
+        retry_after: Some(retry),
+        ..ApiError::new(StatusCode::TOO_MANY_REQUESTS, reason, message)
+    }
+}
+
 /// Waits for every sequence of a request, in request order. Returning early
 /// drops the remaining receivers, which cancels their queued items.
 async fn collect(
@@ -363,6 +422,54 @@ async fn readyz(State(s): State<Arc<AppState>>) -> (StatusCode, &'static str) {
 }
 
 // --- middleware ----------------------------------------------------------------
+
+/// Who made a request, for metrics and logs.
+#[derive(Clone)]
+struct CallerTag {
+    id: String,
+    synthetic: bool,
+}
+
+/// Resolves `Authorization: Bearer <key>` to a caller, or answers 401.
+async fn authenticate(State(s): State<Arc<AppState>>, mut req: Request, next: Next) -> Response {
+    let header = req.headers().get(header::AUTHORIZATION);
+    let caller = match header {
+        None if s.allow_anonymous => Some(s.anonymous.clone()),
+        None => None,
+        Some(value) => value
+            .to_str()
+            .ok()
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .map(str::trim)
+            .filter(|key| !key.is_empty())
+            .and_then(|key| s.callers.authenticate(key)),
+    };
+    let Some(caller) = caller else {
+        s.metrics
+            .rejected
+            .get_or_create(&DropLabel {
+                reason: "unauthenticated",
+            })
+            .inc();
+        let mut resp = ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "unauthenticated",
+            "a valid API key is required: Authorization: Bearer <key>",
+        )
+        .into_response();
+        resp.headers_mut()
+            .insert(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
+        return resp;
+    };
+    let tag = CallerTag {
+        id: caller.id.clone(),
+        synthetic: caller.synthetic,
+    };
+    req.extensions_mut().insert(caller);
+    let mut resp = next.run(req).await;
+    resp.extensions_mut().insert(tag);
+    resp
+}
 
 #[derive(Clone)]
 struct RequestId(String);
@@ -404,13 +511,37 @@ async fn observe(State(s): State<Arc<AppState>>, req: Request, next: Next) -> Re
     s.metrics.in_flight.dec();
     let elapsed = started.elapsed();
     let code = resp.status().as_u16();
+    let tag = resp.extensions().get::<CallerTag>().cloned();
+    // Test traffic is labelled so the SLOs can leave it out.
+    let traffic = match &tag {
+        Some(t) if t.synthetic => "synthetic",
+        _ => "live",
+    };
     s.metrics
         .requests
-        .get_or_create(&CodeLabel { code })
+        .get_or_create(&RequestLabel { code, traffic })
         .observe(elapsed.as_secs_f64());
     let usage = resp.extensions().get::<Usage>().copied();
+    if let Some(t) = &tag {
+        s.metrics
+            .caller_requests
+            .get_or_create(&CallerCodeLabel {
+                caller: t.id.clone(),
+                code,
+            })
+            .inc();
+        if let Some(u) = usage {
+            s.metrics
+                .caller_residues
+                .get_or_create(&CallerLabel {
+                    caller: t.id.clone(),
+                })
+                .inc_by(u.residues as u64);
+        }
+    }
     tracing::info!(
         request_id = %id,
+        caller = tag.as_ref().map(|t| t.id.as_str()),
         status = code,
         duration_ms = elapsed.as_millis() as u64,
         sequences = usage.map(|u| u.sequences),

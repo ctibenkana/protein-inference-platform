@@ -8,8 +8,23 @@ use prometheus_client::metrics::histogram::Histogram;
 use prometheus_client::registry::Registry;
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
-pub struct CodeLabel {
+pub struct RequestLabel {
     pub code: u16,
+    /// "live" or "synthetic" (load tests); the SLOs count only live traffic.
+    pub traffic: &'static str,
+}
+
+/// Caller ids are operator-chosen pseudonyms from the callers file, so the
+/// number of values stays small and none of them names a person.
+#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct CallerCodeLabel {
+    pub caller: String,
+    pub code: u16,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct CallerLabel {
+    pub caller: String,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
@@ -44,8 +59,14 @@ fn latency_buckets() -> Histogram {
 
 pub struct Metrics {
     registry: Registry,
-    /// Completed `/v1/embeddings` requests by HTTP status.
-    pub requests: HistogramFamily<CodeLabel>,
+    /// Completed `/v1/embeddings` requests by HTTP status and traffic type.
+    pub requests: HistogramFamily<RequestLabel>,
+    /// Requests and residues per caller.
+    pub caller_requests: Family<CallerCodeLabel, Counter>,
+    pub caller_residues: Family<CallerLabel, Counter>,
+    /// Callers in the current callers file, and failed reloads of it.
+    pub callers: Gauge,
+    pub callers_reload_errors: Counter,
     /// Requests currently being handled.
     pub in_flight: Gauge,
     /// Sequences and residues accepted for embedding.
@@ -78,6 +99,10 @@ impl Metrics {
         let m = Self {
             registry: Registry::with_prefix("gateway"),
             requests: HistogramFamily::new_with_constructor(latency_buckets),
+            caller_requests: Family::default(),
+            caller_residues: Family::default(),
+            callers: Gauge::default(),
+            callers_reload_errors: Counter::default(),
             in_flight: Gauge::default(),
             sequences: Counter::default(),
             residues: Counter::default(),
@@ -105,8 +130,24 @@ impl Metrics {
         let mut r = m.registry;
         r.register(
             "request_duration_seconds",
-            "Embedding requests by HTTP status.",
+            "Embedding requests by HTTP status and traffic type (live or synthetic).",
             m.requests.clone(),
+        );
+        r.register(
+            "caller_requests",
+            "Embedding requests per caller (API key) and HTTP status.",
+            m.caller_requests.clone(),
+        );
+        r.register(
+            "caller_residues",
+            "Residues embedded per caller (API key).",
+            m.caller_residues.clone(),
+        );
+        r.register("callers", "Callers in the callers file.", m.callers.clone());
+        r.register(
+            "callers_reload_errors",
+            "Failed reloads of the callers file (the previous list stays in force).",
+            m.callers_reload_errors.clone(),
         );
         r.register(
             "requests_in_flight",

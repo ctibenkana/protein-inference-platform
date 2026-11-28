@@ -18,7 +18,8 @@ Design and plan: [docs/design/gateway.md](../../docs/design/gateway.md).
 ## API
 
 ```bash
-curl -s gateway/v1/embeddings -H 'content-type: application/json' \
+curl -s gateway/v1/embeddings -H "Authorization: Bearer $API_KEY" \
+  -H 'content-type: application/json' \
   -d '{"sequences": ["MKTAYIAKQRQISFVKSHFSRQ", "MSEQNNTEMTFQIQRIYTKD"]}'
 ```
 
@@ -36,9 +37,12 @@ curl -s gateway/v1/embeddings -H 'content-type: application/json' \
 | Status | Meaning |
 |---|---|
 | 400 | malformed body or bad timeout header |
+| 401 `unauthenticated` | missing or unknown API key |
 | 413 | over 64 sequences or 8,192 residues in one request (bulk work: use the batch job) |
 | 422 | empty sequence, over 1,022 residues, or not amino-acid letters; the message names the position |
-| 503 `overloaded` + `Retry-After` | the queue is full; nothing was queued |
+| 429 `rate_limited` + `Retry-After` | this key's residues-per-minute allowance is used up; `Retry-After` says when enough has refilled |
+| 429 `caller_in_flight` + `Retry-After` | this key already has its share of the queue in progress |
+| 503 `overloaded` + `Retry-After` | the shared queue is full; nothing was queued |
 | 503 `backend_unavailable` + `Retry-After` | model server unavailable (after one retry) |
 | 504 | deadline passed |
 
@@ -66,6 +70,36 @@ property tests.
 | `--backend-concurrency` | 1 | batches in flight (model-server replicas) |
 | `--max-queue-tokens` | 16384 | queued tokens before new requests are refused (~1.2 s of work here) |
 | `--drain-timeout` | 30 | seconds to finish work in progress on shutdown |
+| `--callers-file` | none | API keys (hashes) and limits; required unless `--allow-anonymous` |
+| `--default-residues-per-minute` | 120000 | per-caller rate unless the callers file sets one |
+| `--default-caller-inflight-tokens` | 12288 | per-caller share of the queue unless set |
+
+## API keys and quotas
+
+Every request needs `Authorization: Bearer <key>`; health checks don't. The
+gateway holds only SHA-256 hashes of keys, in a callers file (a Kubernetes
+Secret on the cluster) that it re-reads every 30 s, so keys are added and
+revoked without a restart:
+
+```bash
+make api-key CALLER=lab-01          # prints the new key once, in your terminal
+make api-key-revoke CALLER=lab-01
+make api-keys                       # callers and limits, never keys
+```
+
+Caller ids are pseudonyms (`lab-01`): they appear in metrics and logs, and
+who holds which id is kept outside the platform. Each caller has two limits,
+both answered with 429 and `Retry-After`:
+
+- **Residues per minute** (default 120,000), as a token bucket holding up to
+  a minute's allowance. Cost follows residues, so the limit does too.
+- **A share of the queue** (default 12,288 tokens of requests in progress,
+  of the shared 16,384), so one heavy caller can't fill the queue and push
+  everyone else into 503s.
+
+A request refused by the shared queue (503) doesn't use up the caller's
+allowance. Callers marked `synthetic` (the load generator) are labelled
+`traffic="synthetic"` in metrics and left out of the SLOs.
 
 ## Behaviour worth knowing
 

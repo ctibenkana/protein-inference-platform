@@ -10,7 +10,7 @@
 //! human proteins (lengths.txt); compute cost depends on length, not content,
 //! so no real sequence is ever sent.
 //!
-//!   loadgen --url http://gateway/v1/embeddings --rates 2,4,8 --duration 60
+//!   LOADGEN_API_KEY=... loadgen --url http://gateway/v1/embeddings --rates 2,4,8 --duration 60
 
 use std::time::Duration;
 
@@ -53,6 +53,15 @@ struct Args {
     label: String,
     #[arg(long, default_value_t = 42)]
     seed: u64,
+    /// API key, sent as "Authorization: Bearer". Read from the environment
+    /// only, so it never appears in a command line or process list.
+    #[arg(
+        long = "api-key-from-env",
+        env = "LOADGEN_API_KEY",
+        hide = true,
+        hide_env_values = true
+    )]
+    api_key: Option<String>,
 }
 
 /// SplitMix64: small, fast and good enough for load shapes; avoids a dependency.
@@ -188,12 +197,15 @@ async fn run_step(
             .collect();
         let residues = seqs.iter().map(String::len).sum();
         let body = serde_json::json!({ "sequences": seqs }).to_string();
-        let req = client
+        let mut req = client
             .post(&args.url)
             .header("content-type", "application/json")
             .header("x-request-timeout", args.timeout.to_string())
             .timeout(Duration::from_secs_f64(args.timeout + 5.0))
             .body(body);
+        if let Some(key) = &args.api_key {
+            req = req.bearer_auth(key);
+        }
         let scheduled = t;
         tasks.push(tokio::spawn(async move {
             let status = match req.send().await {

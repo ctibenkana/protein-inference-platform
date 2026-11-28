@@ -1,11 +1,13 @@
 //! Command-line flags, each also settable through a `GATEWAY_*` variable.
 
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use clap::{Parser, ValueEnum};
 
 use crate::api::Timeouts;
+use crate::auth::Defaults;
 use crate::batcher::{Budget, Policy};
 use crate::scheduler;
 use crate::validate::{Limits, SPECIAL_TOKENS};
@@ -89,6 +91,38 @@ pub struct Config {
     #[arg(long, env = "GATEWAY_BACKEND_CONCURRENCY", default_value_t = 1)]
     pub backend_concurrency: usize,
 
+    /// JSON file listing callers and the SHA-256 of their API keys (see
+    /// src/auth.rs); re-read every --callers-reload seconds.
+    #[arg(long, env = "GATEWAY_CALLERS_FILE")]
+    pub callers_file: Option<PathBuf>,
+
+    /// Serve requests without an API key as "anonymous". Local development
+    /// only; one of this or --callers-file is required.
+    #[arg(long, env = "GATEWAY_ALLOW_ANONYMOUS")]
+    pub allow_anonymous: bool,
+
+    /// Seconds between checks of the callers file for changes.
+    #[arg(long, env = "GATEWAY_CALLERS_RELOAD", default_value_t = 30.0)]
+    pub callers_reload: f64,
+
+    /// Default rate per caller, in residues per minute (callers may override).
+    #[arg(
+        long,
+        env = "GATEWAY_DEFAULT_RESIDUES_PER_MINUTE",
+        default_value_t = 120_000
+    )]
+    pub default_residues_per_minute: u64,
+
+    /// Default share of the queue per caller: tokens of its requests in
+    /// progress (callers may override). Below --max-queue-tokens, so one
+    /// caller can't fill the queue alone.
+    #[arg(
+        long,
+        env = "GATEWAY_DEFAULT_CALLER_INFLIGHT_TOKENS",
+        default_value_t = 12_288
+    )]
+    pub default_caller_inflight_tokens: usize,
+
     #[arg(long, env = "GATEWAY_LOG_FORMAT", value_enum, default_value_t = LogFormat::Json)]
     pub log_format: LogFormat,
 }
@@ -138,8 +172,22 @@ impl Config {
                 self.max_batch_tokens
             ));
         }
+        if self.callers_file.is_none() && !self.allow_anonymous {
+            return Err(
+                "set --callers-file (API keys), or --allow-anonymous for local development".into(),
+            );
+        }
         // Otherwise the largest valid request could never be admitted.
-        let largest = self.max_request_residues + self.max_sequences * SPECIAL_TOKENS;
+        let largest = self.largest_request_tokens();
+        if self.default_caller_inflight_tokens < largest {
+            return Err(format!(
+                "--default-caller-inflight-tokens ({}) must hold the largest request allowed ({largest} tokens)",
+                self.default_caller_inflight_tokens
+            ));
+        }
+        if self.default_residues_per_minute < self.max_request_residues as u64 {
+            return Err("--default-residues-per-minute must allow the largest request (--max-request-residues)".into());
+        }
         if self.max_queue_tokens < largest {
             return Err(format!(
                 "--max-queue-tokens ({}) must hold the largest request allowed ({largest} tokens)",
@@ -155,6 +203,24 @@ impl Config {
             );
         }
         Ok(())
+    }
+
+    /// Tokens of the largest request allowed (residues + 2 per sequence).
+    fn largest_request_tokens(&self) -> usize {
+        self.max_request_residues + self.max_sequences * SPECIAL_TOKENS
+    }
+
+    pub fn auth_defaults(&self) -> Defaults {
+        Defaults {
+            residues_per_minute: self.default_residues_per_minute,
+            max_inflight_tokens: self.default_caller_inflight_tokens,
+            largest_request_residues: self.max_request_residues as u64,
+            largest_request_tokens: self.largest_request_tokens(),
+        }
+    }
+
+    pub fn callers_reload(&self) -> Duration {
+        Duration::from_secs_f64(self.callers_reload)
     }
 
     pub fn shutdown_delay(&self) -> Duration {

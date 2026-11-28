@@ -86,10 +86,12 @@ The short window makes the alert clear soon after recovery.
 ## 4. Embeddings API availability
 
 **SLI:** requests answered without a 5xx ÷ all requests, from the gateway's
-request histogram.
+request histogram, **live traffic only**: requests from synthetic callers
+(load tests) are labelled `traffic="synthetic"` and left out.
 
-- **4xx count as good:** an invalid sequence or an oversized request is the
-  caller's mistake, not the service failing.
+- **4xx count as good:** an invalid sequence, an oversized request, a
+  missing API key (401) or a caller over its own quota (429) is on the
+  caller's side, not the service failing.
 - **503 for a full queue counts as bad:** refusing work quickly is the right
   behaviour under overload, but it means the service is short of capacity,
   and that should show up.
@@ -101,7 +103,8 @@ of complete outage, or 1 request in 100 failing all week.
 ## 5. Embeddings API latency
 
 **SLI:** successful requests answered within 1 s ÷ successful requests,
-from the `le="1.0"` bucket of the gateway's request histogram.
+from the `le="1.0"` bucket of the gateway's request histogram (live traffic
+only).
 
 **Why 1 s at 95%:** set from [load tests](benchmarks/gateway-load-tests.md),
 not guessed. On 2 CPU threads, 95% within 1 s holds up to about 20
@@ -144,12 +147,11 @@ volumes, and so on) remain enabled alongside these.
   out and it restarts a few times before settling. Seen on the local
   cluster; it recovers on its own. A separate startup probe would fix it,
   but the chart doesn't expose one for the Grafana container.
-- **Load tests spend the real error budget.** `make loadtest` drives the
-  deployed service, so overload tests count against objectives 4 and 5 like
-  real traffic (on 2026-11-28 they took 7-day availability to 90% and fired
-  both slow-burn alerts). Run overload tests against a separate deployment,
-  or keep `make loadtest` to rates within capacity; marking test traffic so
-  the SLIs can exclude it is a planned improvement.
+- **Load tests spent the real error budget (fixed).** Before load-test
+  traffic was labelled, overload tests counted against objectives 4 and 5
+  (on 2026-11-28 they took 7-day availability to 90% and fired both
+  slow-burn alerts). `make loadtest` now uses a synthetic API key, and the
+  SLIs count live traffic only (unit-tested).
 
 ## Notifications
 
@@ -196,6 +198,6 @@ the alarm, which is what the 10-minute tolerance is for.
 
 - **Longer windows.** 30-day SLOs need longer retention (or a long-term store);
   7 days matches what Prometheus currently keeps.
-- **Per-caller budgets.** The API's SLIs are service-wide. Once there are
-  several lab users, a per-caller view (with authentication) will show
-  whether one heavy user is spending everyone's budget.
+- **Per-caller SLOs.** Each caller has quotas and per-caller request
+  metrics (and a dashboard row), but the SLIs are service-wide; per-caller
+  attainment would show whether one user is having a worse time than others.

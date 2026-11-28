@@ -98,8 +98,8 @@ add(stat("Queue fill now",
 
 # --- row 2: traffic and latency -----------------------------------------------
 add(series("Requests by status",
-           "Embedding requests per second, by HTTP status.",
-           [target("sum by (code) (rate(gateway_request_duration_seconds_count[1m]))", "{{code}}")],
+           "Embedding requests per second, by HTTP status and traffic type. Synthetic traffic (load tests) is left out of the SLOs.",
+           [target("sum by (code, traffic) (rate(gateway_request_duration_seconds_count[1m]))", "{{code}} {{traffic}}")],
            "reqps", stack=True), 0, 5, 12, 8)
 add(series("Latency of successful requests",
            "Percentiles from the gateway's request histogram. The dashed line is the 1 s objective.",
@@ -155,6 +155,16 @@ add(series("Model server calls by outcome",
            "Batches sent to the model server. Anything but ok is retried once.",
            [target("sum by (outcome) (rate(gateway_backend_request_duration_seconds_count[1m]))", "{{outcome}}")],
            "reqps", stack=True), 12, 37, 12, 8)
+# --- row 7: callers ------------------------------------------------------------------
+add(series("Requests by caller",
+           "Requests per second per API key (pseudonymous caller ids), by status. 429 means the caller hit its own rate or queue share.",
+           [target("sum by (caller, code) (rate(gateway_caller_requests_total[1m]))", "{{caller}} {{code}}")],
+           "reqps", stack=True), 0, 45, 12, 8)
+add(series("Residues by caller",
+           "Residues embedded per second per caller: the unit the per-caller rate limit is set in.",
+           [target("sum by (caller) (rate(gateway_caller_residues_total[1m]))", "{{caller}}")],
+           "short", stack=True), 12, 45, 12, 8)
+
 add({
     "type": "logs",
     "title": "Gateway warnings and errors",
@@ -162,7 +172,7 @@ add({
     "datasource": LOKI,
     "targets": [{"refId": "A", "expr": '{namespace="inference", container="gateway"} |= "level" != "\\"level\\":\\"INFO\\""', "datasource": LOKI}],
     "options": {"showTime": True, "wrapLogMessage": True, "sortOrder": "Descending"},
-}, 0, 45, 24, 8)
+}, 0, 53, 24, 8)
 
 dashboard = {
     "uid": "embeddings-api",

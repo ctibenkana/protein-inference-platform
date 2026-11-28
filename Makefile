@@ -29,7 +29,7 @@ GRAFANA_PORT ?= 3300
 ARGOCD_PORT  ?= 8380
 
 .PHONY: help check init plan up down creds fmt validate \
-        test-rules discord-secret deadman-secret test-notification local-silences gateway-demo loadtest kind-up kind-down context-guard embed-image embed-job argocd grafana-secret status ui-argocd ui-grafana
+        test-rules discord-secret deadman-secret test-notification local-silences gateway-demo loadtest api-key api-key-revoke api-keys kind-up kind-down context-guard embed-image embed-job argocd grafana-secret status ui-argocd ui-grafana
 
 help:
 	@grep -E '^#' Makefile | sed 's/^# \{0,1\}//'
@@ -192,13 +192,32 @@ embed-job: context-guard
 
 # --- Inference gateway -------------------------------------------------------
 #   make gateway-demo  (send two proteins through the gateway on the cluster)
+#   make api-key CALLER=lab-01   (new caller; prints its key once, in your terminal)
+#   make api-key-revoke CALLER=lab-01
+#   make api-keys      (list callers and their limits, no keys)
 
 GATEWAY_PORT ?= 8088
 
+api-key: context-guard
+	@test -n "$(CALLER)" || (echo "usage: make api-key CALLER=lab-01 [RPM=residues-per-minute]" && exit 1)
+	@python3 scripts/callers.py add $(CALLER) $(if $(RPM),--residues-per-minute $(RPM))
+
+api-key-revoke: context-guard
+	@test -n "$(CALLER)" || (echo "usage: make api-key-revoke CALLER=lab-01" && exit 1)
+	@python3 scripts/callers.py revoke $(CALLER)
+
+api-keys: context-guard
+	@python3 scripts/callers.py list
+
+# The demo uses its own caller, whose key lives only in a Secret; curl reads
+# the header from stdin, so the key never appears in a command line.
 gateway-demo: context-guard
+	@python3 scripts/callers.py ensure demo --store-key-in gateway-demo-key
 	@kubectl -n inference port-forward svc/gateway $(GATEWAY_PORT):80 >/dev/null 2>&1 & pf=$$!; \
 	sleep 3; \
-	curl -sS localhost:$(GATEWAY_PORT)/v1/embeddings -H 'content-type: application/json' \
+	kubectl -n inference get secret gateway-demo-key -o jsonpath='{.data.api-key}' | base64 -d | \
+	sed 's/^/Authorization: Bearer /' | \
+	curl -sS localhost:$(GATEWAY_PORT)/v1/embeddings -H @- -H 'content-type: application/json' \
 		-d '{"sequences": ["MKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQ", "MSEQNNTEMTFQIQRIYTKDISFEAPNAPHVFQKDW"]}' | \
 	python3 scripts/show_embeddings.py; \
 	kill $$pf
@@ -209,8 +228,12 @@ LOADTEST_RATES ?= 2,4,8
 LOADTEST_DURATION ?= 60
 GATEWAY_IMAGE = $(shell sed -n 's/^ *image: \(ghcr.io[^ ]*gateway@sha256:[0-9a-f]*\).*/\1/p' deploy/manifests/inference/embedding-service.yaml)
 
+# Load tests run as the synthetic caller "loadtest", which the SLOs leave
+# out, with limits high enough not to be the bottleneck.
 loadtest: context-guard
 	@test -n "$(GATEWAY_IMAGE)" || (echo "gateway image not found in deploy/manifests/inference/embedding-service.yaml" && exit 1)
+	@python3 scripts/callers.py ensure loadtest --synthetic --store-key-in gateway-loadtest-key \
+		--residues-per-minute 100000000 --max-inflight-tokens 16384
 	@job=$$(sed -e 's|image: IMAGE|image: $(GATEWAY_IMAGE)|' -e 's|=RATES|=$(LOADTEST_RATES)|' -e 's|=DURATION|=$(LOADTEST_DURATION)|' \
 		services/gateway/k8s/loadtest-job.yaml | kubectl create -f - -o name) && \
 	echo "submitted $$job (rates $(LOADTEST_RATES) req/s, $(LOADTEST_DURATION) s each); waiting..." && \

@@ -5,6 +5,7 @@
 //! error messages; errors refer to a sequence's position in the request.
 
 pub mod api;
+pub mod auth;
 pub mod backend;
 pub mod batcher;
 pub mod config;

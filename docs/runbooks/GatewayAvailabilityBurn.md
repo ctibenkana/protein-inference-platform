@@ -12,8 +12,9 @@ error budget is draining:
 | Slow | over 6% failed in the last 6 hours, and in the last 30 minutes | about 1 day |
 
 Both need some traffic (30 requests an hour, 60 in 6 hours), so a handful of
-failures at a quiet time doesn't alert. 4xx answers are callers' mistakes
-and don't count.
+failures at a quiet time doesn't alert. 4xx answers (including 401 for a bad
+key and 429 for a caller over its own quota) are on the callers' side and
+don't count, and neither does synthetic traffic from load tests.
 
 ## Impact
 Lab users' scripts get errors. Well-behaved clients retry after
@@ -48,6 +49,10 @@ Demand exceeds capacity. Measured capacity per replica is in the
 [load tests](../benchmarks/gateway-load-tests.md); compare with
 `sum(rate(gateway_sequences_total[5m]))`.
 
+- Check whether one caller is responsible: `sum by (caller) (rate(gateway_caller_residues_total[5m]))`
+  (dashboard row "Requests by caller"). Lower its limits rather than letting
+  it push everyone into 503s:
+  `python3 scripts/callers.py limits <caller> --residues-per-minute <n>`.
 - Short term: nothing is broken; refusals protect latency for accepted work.
   Ask heavy users to send bulk work to the batch job (`make embed-job`), not
   the online API.

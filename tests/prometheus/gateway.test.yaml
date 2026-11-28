@@ -13,11 +13,11 @@ tests:
   - name: healthy traffic has zero error and slow ratios, and no alerts
     interval: 1m
     input_series:
-      - series: 'gateway_request_duration_seconds_count{code="200"}'
+      - series: 'gateway_request_duration_seconds_count{traffic="live", code="200"}'
         values: "0+60x90"
-      - series: 'gateway_request_duration_seconds_bucket{code="200", le="1.0"}'
+      - series: 'gateway_request_duration_seconds_bucket{traffic="live", code="200", le="1.0"}'
         values: "0+60x90"
-      - series: 'gateway_request_duration_seconds_count{code="422"}'
+      - series: 'gateway_request_duration_seconds_count{traffic="live", code="422"}'
         values: "0+6x90" # callers' mistakes count as good
     promql_expr_test:
       - expr: gateway:errors:ratio_rate1h
@@ -41,9 +41,9 @@ tests:
   - name: no traffic means no SLI series, not a false 0% or 100%
     interval: 1m
     input_series:
-      - series: 'gateway_request_duration_seconds_count{code="200"}'
+      - series: 'gateway_request_duration_seconds_count{traffic="live", code="200"}'
         values: "5x90"
-      - series: 'gateway_request_duration_seconds_bucket{code="200", le="1.0"}'
+      - series: 'gateway_request_duration_seconds_bucket{traffic="live", code="200", le="1.0"}'
         values: "5x90"
     promql_expr_test:
       - expr: gateway:errors:ratio_rate1h
@@ -56,11 +56,11 @@ tests:
   - name: 7-day attainment
     interval: 1m
     input_series:
-      - series: 'gateway_request_duration_seconds_count{code="200"}'
+      - series: 'gateway_request_duration_seconds_count{traffic="live", code="200"}'
         values: "0+57x60"
-      - series: 'gateway_request_duration_seconds_count{code="503"}'
+      - series: 'gateway_request_duration_seconds_count{traffic="live", code="503"}'
         values: "0+3x60"
-      - series: 'gateway_request_duration_seconds_bucket{code="200", le="1.0"}'
+      - series: 'gateway_request_duration_seconds_bucket{traffic="live", code="200", le="1.0"}'
         values: "0+54x60" # 54 of 57 successful requests within 1 s
     promql_expr_test:
       - expr: gateway:availability:7d
@@ -74,13 +74,46 @@ tests:
           - labels: 'gateway:latency_good:7d'
             value: 0.9473684210526315
 
+  - name: synthetic traffic (load tests) is left out of the SLIs
+    interval: 1m
+    input_series:
+      - series: 'gateway_request_duration_seconds_count{traffic="live", code="200"}'
+        values: "0+10x90"
+      - series: 'gateway_request_duration_seconds_bucket{traffic="live", code="200", le="1.0"}'
+        values: "0+10x90"
+      # An overload test: many failing and slow synthetic requests.
+      - series: 'gateway_request_duration_seconds_count{traffic="synthetic", code="503"}'
+        values: "0+500x90"
+      - series: 'gateway_request_duration_seconds_count{traffic="synthetic", code="200"}'
+        values: "0+500x90"
+      - series: 'gateway_request_duration_seconds_bucket{traffic="synthetic", code="200", le="1.0"}'
+        values: "0x90"
+    promql_expr_test:
+      - expr: gateway:errors:ratio_rate1h
+        eval_time: 80m
+        exp_samples:
+          - labels: 'gateway:errors:ratio_rate1h'
+            value: 0
+      - expr: gateway:slow:ratio_rate1h
+        eval_time: 80m
+        exp_samples:
+          - labels: 'gateway:slow:ratio_rate1h'
+            value: 0
+    alert_rule_test:
+      - eval_time: 80m
+        alertname: GatewayAvailabilityBurnFast
+        exp_alerts: []
+      - eval_time: 80m
+        alertname: GatewayLatencyBurnFast
+        exp_alerts: []
+
   # --- availability burn ------------------------------------------------------------
   - name: an outage with traffic pages (fast burn)
     interval: 1m
     input_series:
-      - series: 'gateway_request_duration_seconds_count{code="200"}'
+      - series: 'gateway_request_duration_seconds_count{traffic="live", code="200"}'
         values: "0x90"
-      - series: 'gateway_request_duration_seconds_count{code="503"}'
+      - series: 'gateway_request_duration_seconds_count{traffic="live", code="503"}'
         values: "0+60x90"
     alert_rule_test:
       - eval_time: 70m
@@ -102,7 +135,7 @@ tests:
     interval: 1m
     input_series:
       # One failing request every 5 minutes: 100% errors, 12 per hour.
-      - series: 'gateway_request_duration_seconds_count{code="503"}'
+      - series: 'gateway_request_duration_seconds_count{traffic="live", code="503"}'
         values: "0+0.2x90"
     alert_rule_test:
       - eval_time: 80m
@@ -112,9 +145,9 @@ tests:
   - name: steady 8% errors burns slowly, not fast
     interval: 1m
     input_series:
-      - series: 'gateway_request_duration_seconds_count{code="200"}'
+      - series: 'gateway_request_duration_seconds_count{traffic="live", code="200"}'
         values: "0+46x400"
-      - series: 'gateway_request_duration_seconds_count{code="503"}'
+      - series: 'gateway_request_duration_seconds_count{traffic="live", code="503"}'
         values: "0+4x400"
     alert_rule_test:
       - eval_time: 390m
@@ -135,9 +168,9 @@ tests:
   - name: successful but slow requests page (fast burn)
     interval: 1m
     input_series:
-      - series: 'gateway_request_duration_seconds_count{code="200"}'
+      - series: 'gateway_request_duration_seconds_count{traffic="live", code="200"}'
         values: "0+60x90"
-      - series: 'gateway_request_duration_seconds_bucket{code="200", le="1.0"}'
+      - series: 'gateway_request_duration_seconds_bucket{traffic="live", code="200", le="1.0"}'
         values: "0+12x90" # only 20% within 1 s
     alert_rule_test:
       - eval_time: 70m

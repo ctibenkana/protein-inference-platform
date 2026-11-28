@@ -29,8 +29,8 @@ same cost problem the batch job solved, in a harder form:
    and runbooks, like the rest of the platform.
 5. A backend interface that the vLLM stage plugs into later.
 
-**Not goals now:** authentication and per-user quotas (next, once the lab
-uses it), GPUs, autoscaling, multiple models.
+**Not goals now:** GPUs, autoscaling, multiple models. (Authentication and
+per-caller quotas, deferred at first, are now built; see below.)
 
 ## Architecture
 
@@ -180,10 +180,30 @@ laptop CPU:
 A deadline-aware limit (refuse what can't finish before its deadline, from
 the measured drain rate) would be the next refinement.
 
+## Authentication and quotas
+
+Every request carries an API key (`Authorization: Bearer`). The gateway
+stores only the keys' SHA-256 hashes, in a file it re-reads every 30 s, and
+looks callers up by hash, so no comparison ever touches a key. Each caller
+gets two limits, answered with 429 (the caller's side) rather than 503 (the
+service's side):
+
+- a **rate in residues per minute**, as a token bucket, because cost follows
+  residues, not requests;
+- a **share of the queue**, counted from admission until the request
+  finishes, so one heavy caller can't fill the shared queue and push everyone
+  else into 503s.
+
+Order of checks: validation, the caller's queue share, the caller's rate,
+then the shared queue; a refusal by the shared queue refunds the caller's
+rate, so a 503 never costs quota. Callers marked `synthetic` (load tests)
+are labelled `traffic="synthetic"` and left out of the SLOs.
+
 ## Privacy
 
-As elsewhere on the platform: no sequences or caller identifiers in logs,
-metrics, traces or error messages. Errors refer to sequence *indices*. The
+As elsewhere on the platform: no sequences in logs, metrics, traces or error
+messages. Callers appear only as operator-chosen pseudonyms (`lab-01`);
+which person holds which id is kept outside the platform. Errors refer to sequence *indices*. The
 log pipeline's sequence detector stays in place as a second line of defence,
 and a test checks that error bodies never echo input.
 
