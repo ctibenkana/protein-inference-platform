@@ -1,0 +1,137 @@
+name: gateway
+
+# Format, lint and test on every change; on main, publishes a signed
+# multi-arch image tagged with the commit; on a tag gateway-vX.Y.Z, also
+# publishes X.Y.Z.
+
+on:
+  pull_request:
+    paths:
+      - "services/gateway/**"
+      - ".github/workflows/gateway.yml"
+  push:
+    branches: [main]
+    paths:
+      - "services/gateway/**"
+      - ".github/workflows/gateway.yml"
+    tags: ["gateway-v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gateway-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/gateway
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    working-directory: services/gateway
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # rust-toolchain.toml pins the compiler; rustup installs it on first use.
+      - name: toolchain
+        run: rustup toolchain install
+
+      - name: format
+        run: cargo fmt --check
+
+      - name: lint
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: test
+        run: cargo test --locked
+
+  image:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # push to GHCR
+      id-token: write # keyless signing with Sigstore
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # No QEMU: the Dockerfile cross-compiles, and the runtime stage only copies.
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: smoke test (amd64 image starts and reports its version)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: services/gateway
+          platforms: linux/amd64
+          load: true
+          tags: gateway:ci
+          cache-from: type=gha,scope=gateway
+          cache-to: type=gha,scope=gateway,mode=max
+      - run: docker run --rm gateway:ci --version
+
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        if: github.event_name != 'pull_request'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=sha,prefix=sha-
+            type=raw,value=main,enable=${{ github.ref == 'refs/heads/main' }}
+            type=match,pattern=gateway-v(\d+\.\d+\.\d+),group=1
+
+      - id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: services/gateway
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=gateway
+          cache-to: type=gha,scope=gateway,mode=max
+
+      - uses: sigstore/cosign-installer@881c63bd87e38389154debd8331404ce7ca8a3ab # v4.1.4
+        if: github.event_name != 'pull_request'
+
+      - name: sign image (keyless, Sigstore)
+        if: github.event_name != 'pull_request'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+
+      - name: summary
+        if: github.event_name != 'pull_request'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          {
+            echo "### gateway image"
+            echo "Digest: \`${DIGEST}\`"
+            echo '```'
+            echo "${TAGS}"
+            echo '```'
+            echo "Verify the signature:"
+            echo '```'
+            echo "cosign verify ${IMAGE}@${DIGEST} \\"
+            echo "  --certificate-identity-regexp 'https://github.com/${GITHUB_REPOSITORY}/.github/workflows/gateway.yml@.*' \\"
+            echo "  --certificate-oidc-issuer https://token.actions.githubusercontent.com"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

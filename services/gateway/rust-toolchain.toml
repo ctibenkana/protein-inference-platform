@@ -1,0 +1,4 @@
+# The same compiler locally, in CI and in the image build.
+[toolchain]
+channel = "1.100.1"
+components = ["clippy", "rustfmt"]

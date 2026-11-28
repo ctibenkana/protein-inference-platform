@@ -1,6 +1,9 @@
 [package]
 name = "gateway"
 version = "0.1.0"
+description = "Inference gateway for protein embeddings"
+license = "Apache-2.0"
+publish = false
 edition = "2024"
 
 [dependencies]
@@ -20,3 +23,9 @@ uuid = { version = "1.29.3", features = ["v4"] }
 [dev-dependencies]
 http-body-util = "0.1.5"
 tower = { version = "0.5.3", features = ["util"] }
+
+# Small, fast release binary for the container image.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
