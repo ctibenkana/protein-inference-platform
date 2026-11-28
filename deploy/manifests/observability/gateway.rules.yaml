@@ -1,0 +1,156 @@
+# SLOs and alerts for the embeddings API (gateway + model server).
+# See docs/slos.md and docs/benchmarks/gateway-load-tests.md.
+#
+# SLIs, from the gateway's request histogram:
+#   availability: requests answered without a 5xx. 4xx are the caller's
+#                 mistakes and count as good; 503 for a full queue counts as
+#                 bad, since it means the service is short of capacity.
+#   latency:      successful requests answered within 1 s.
+# Objectives over 7 days: availability 99%, latency 95%. Alerts use
+# multi-window burn rates, and need a minimum of traffic, because lab use
+# is sporadic and one failure among three requests is not an outage.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: gateway
+  namespace: monitoring
+spec:
+  groups:
+    # ------------------------------------------------------------------ SLIs
+    - name: gateway.sli
+      interval: 1m
+      rules:
+        # Requests per window, for the minimum-traffic guard.
+        - record: gateway:requests:increase1h
+          expr: sum(increase(gateway_request_duration_seconds_count[1h]))
+        - record: gateway:requests:increase6h
+          expr: sum(increase(gateway_request_duration_seconds_count[6h]))
+
+        # Share of requests answered with a 5xx. No series without traffic;
+        # 0 (not no data) when there is traffic but no 5xx.
+        - record: gateway:errors:ratio_rate5m
+          expr: |
+            (sum(rate(gateway_request_duration_seconds_count{code=~"5.."}[5m])) or vector(0))
+            / (sum(rate(gateway_request_duration_seconds_count[5m])) > 0)
+        - record: gateway:errors:ratio_rate30m
+          expr: |
+            (sum(rate(gateway_request_duration_seconds_count{code=~"5.."}[30m])) or vector(0))
+            / (sum(rate(gateway_request_duration_seconds_count[30m])) > 0)
+        - record: gateway:errors:ratio_rate1h
+          expr: |
+            (sum(rate(gateway_request_duration_seconds_count{code=~"5.."}[1h])) or vector(0))
+            / (sum(rate(gateway_request_duration_seconds_count[1h])) > 0)
+        - record: gateway:errors:ratio_rate6h
+          expr: |
+            (sum(rate(gateway_request_duration_seconds_count{code=~"5.."}[6h])) or vector(0))
+            / (sum(rate(gateway_request_duration_seconds_count[6h])) > 0)
+
+        # Share of successful requests slower than 1 s (the le="1.0" bucket).
+        - record: gateway:slow:ratio_rate5m
+          expr: |
+            1 - (
+              sum(rate(gateway_request_duration_seconds_bucket{code="200", le="1.0"}[5m]))
+              / (sum(rate(gateway_request_duration_seconds_count{code="200"}[5m])) > 0)
+            )
+        - record: gateway:slow:ratio_rate30m
+          expr: |
+            1 - (
+              sum(rate(gateway_request_duration_seconds_bucket{code="200", le="1.0"}[30m]))
+              / (sum(rate(gateway_request_duration_seconds_count{code="200"}[30m])) > 0)
+            )
+        - record: gateway:slow:ratio_rate1h
+          expr: |
+            1 - (
+              sum(rate(gateway_request_duration_seconds_bucket{code="200", le="1.0"}[1h]))
+              / (sum(rate(gateway_request_duration_seconds_count{code="200"}[1h])) > 0)
+            )
+        - record: gateway:slow:ratio_rate6h
+          expr: |
+            1 - (
+              sum(rate(gateway_request_duration_seconds_bucket{code="200", le="1.0"}[6h]))
+              / (sum(rate(gateway_request_duration_seconds_count{code="200"}[6h])) > 0)
+            )
+
+        # 7-day SLO attainment, for the dashboard and reviews.
+        - record: gateway:availability:7d
+          expr: |
+            1 - (
+              (sum(increase(gateway_request_duration_seconds_count{code=~"5.."}[7d])) or vector(0))
+              / (sum(increase(gateway_request_duration_seconds_count[7d])) > 0)
+            )
+        - record: gateway:latency_good:7d
+          expr: |
+            sum(increase(gateway_request_duration_seconds_bucket{code="200", le="1.0"}[7d]))
+            / (sum(increase(gateway_request_duration_seconds_count{code="200"}[7d])) > 0)
+
+    # ---------------------------------------------------------------- SLOs
+    - name: gateway.slo
+      interval: 1m
+      rules:
+        # Fast burn: at this rate the 7-day budget is gone in about 12 hours.
+        - alert: GatewayAvailabilityBurnFast
+          expr: |
+            gateway:errors:ratio_rate1h > (14.4 * 0.01)
+            and gateway:errors:ratio_rate5m > (14.4 * 0.01)
+            and gateway:requests:increase1h >= 30
+          labels:
+            severity: critical
+            slo: embeddings-availability
+          annotations:
+            summary: "Embeddings API is failing requests (fast error-budget burn)"
+            description: "{{ $value | humanizePercentage }} of requests in the last hour got a 5xx (objective: at most 1% over 7 days)."
+            runbook_url: https://github.com/ctibenkana/protein-inference-platform/blob/main/docs/runbooks/GatewayAvailabilityBurn.md
+        # Slow burn: steady degradation that would exhaust the budget in about a day.
+        - alert: GatewayAvailabilityBurnSlow
+          expr: |
+            gateway:errors:ratio_rate6h > (6 * 0.01)
+            and gateway:errors:ratio_rate30m > (6 * 0.01)
+            and gateway:requests:increase6h >= 60
+          labels:
+            severity: warning
+            slo: embeddings-availability
+          annotations:
+            summary: "Embeddings API availability is degrading (slow error-budget burn)"
+            description: "{{ $value | humanizePercentage }} of requests in the last 6 hours got a 5xx (objective: at most 1% over 7 days)."
+            runbook_url: https://github.com/ctibenkana/protein-inference-platform/blob/main/docs/runbooks/GatewayAvailabilityBurn.md
+
+        - alert: GatewayLatencyBurnFast
+          expr: |
+            gateway:slow:ratio_rate1h > (14.4 * 0.05)
+            and gateway:slow:ratio_rate5m > (14.4 * 0.05)
+            and gateway:requests:increase1h >= 30
+          labels:
+            severity: critical
+            slo: embeddings-latency
+          annotations:
+            summary: "Embeddings API is slow (fast error-budget burn)"
+            description: "{{ $value | humanizePercentage }} of successful requests in the last hour took over 1 s (objective: at most 5% over 7 days)."
+            runbook_url: https://github.com/ctibenkana/protein-inference-platform/blob/main/docs/runbooks/GatewayLatencyBurn.md
+        - alert: GatewayLatencyBurnSlow
+          expr: |
+            gateway:slow:ratio_rate6h > (6 * 0.05)
+            and gateway:slow:ratio_rate30m > (6 * 0.05)
+            and gateway:requests:increase6h >= 60
+          labels:
+            severity: warning
+            slo: embeddings-latency
+          annotations:
+            summary: "Embeddings API latency is degrading (slow error-budget burn)"
+            description: "{{ $value | humanizePercentage }} of successful requests in the last 6 hours took over 1 s (objective: at most 5% over 7 days)."
+            runbook_url: https://github.com/ctibenkana/protein-inference-platform/blob/main/docs/runbooks/GatewayLatencyBurn.md
+
+    # ------------------------------------------------------------ symptoms
+    - name: gateway.health
+      rules:
+        # Burn-rate alerts need traffic; this one doesn't. Both containers
+        # of the embedding service must be scraped and up.
+        - alert: EmbeddingServiceDown
+          expr: |
+            (count(up{namespace="inference", container=~"gateway|model-server"} == 1) or vector(0)) < 2
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Embedding service is down"
+            description: "Fewer than both containers (gateway, model server) of the embedding service have been up for 5 minutes; the embeddings API is probably unavailable."
+            runbook_url: https://github.com/ctibenkana/protein-inference-platform/blob/main/docs/runbooks/EmbeddingServiceDown.md

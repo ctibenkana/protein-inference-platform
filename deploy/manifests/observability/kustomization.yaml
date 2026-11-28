@@ -4,6 +4,7 @@ kind: Kustomization
 namespace: monitoring
 resources:
   - esm-embed.rules.yaml
+  - gateway.rules.yaml
   - platform.rules.yaml
 generatorOptions:
   disableNameSuffixHash: true
@@ -13,3 +14,6 @@ configMapGenerator:
   - name: dashboard-esm-embed
     files:
       - dashboards/esm-embed.json
+  - name: dashboard-gateway
+    files:
+      - dashboards/gateway.json

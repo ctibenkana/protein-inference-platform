@@ -105,6 +105,23 @@ tests:
               description: "22.5% of computed tokens were padding in the last 7 days (objective: at most 10%)."
               runbook_url: https://github.com/ctibenkana/protein-inference-platform/blob/main/docs/runbooks/EsmEmbedPaddingBudgetExceeded.md
 
+  - name: model server padding survives a restart (increase, not max)
+    interval: 1m
+    input_series:
+      # The long-running server restarts at 3m, resetting its counters.
+      # Real total: 30 + 30 + 0 + 10 = 70 padding of 350 computed = 20%.
+      # max_over_time would report the largest stretch: 60 / 200 = 30%.
+      - series: 'esm_embed_pad_tokens_total{pod="embedding-service-a", strategy="served"}'
+        values: "0 30 60 0 10"
+      - series: 'esm_embed_tokens_computed_total{pod="embedding-service-a", strategy="served"}'
+        values: "0 100 200 50 150"
+    promql_expr_test:
+      - expr: esm_embed:padding_ratio:7d
+        eval_time: 4m
+        exp_samples:
+          - labels: 'esm_embed:padding_ratio:7d'
+            value: 0.2
+
   # --- per-job symptoms -------------------------------------------------------
   - name: failed job alerts immediately
     interval: 1m

@@ -31,14 +31,27 @@ spec:
             esm_embed:jobs_succeeded:7d
             /
             ((esm_embed:jobs_succeeded:7d + esm_embed:jobs_failed:7d) > 0)
-        # Share of computed token positions spent on padding, all jobs.
-        # Each job pod has its own counter series; max_over_time takes its
-        # final value, so short-lived pods are counted in full.
+        # Share of computed token positions spent on padding: batch jobs and
+        # the long-running model server (strategy="served") together.
+        # - Job pods are short-lived and their counters start before the
+        #   first scrape, so increase() would miss the start; each pod's
+        #   series ends at its final value, which max_over_time takes.
+        # - The model server lives for days and restarts, resetting its
+        #   counters; max_over_time would count only the largest stretch,
+        #   while increase() handles resets.
         - record: esm_embed:padding_ratio:7d
           expr: |
-            sum(max_over_time(esm_embed_pad_tokens_total[7d]))
+            (
+              (sum(max_over_time(esm_embed_pad_tokens_total{strategy!="served"}[7d])) or vector(0))
+              + (sum(increase(esm_embed_pad_tokens_total{strategy="served"}[7d])) or vector(0))
+            )
             /
-            (sum(max_over_time(esm_embed_tokens_computed_total[7d])) > 0)
+            (
+              (
+                (sum(max_over_time(esm_embed_tokens_computed_total{strategy!="served"}[7d])) or vector(0))
+                + (sum(increase(esm_embed_tokens_computed_total{strategy="served"}[7d])) or vector(0))
+              ) > 0
+            )
 
     # ---------------------------------------------------------------- SLOs
     - name: esm-embed.slo

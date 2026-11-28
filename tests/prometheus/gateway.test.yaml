@@ -1,0 +1,205 @@
+# promtool unit tests for deploy/manifests/observability/gateway.rules.yaml
+# Run: make test-rules
+#
+# Traffic is written as cumulative request counts per minute, e.g.
+# "0+60x90" is 1 request per second for 90 minutes.
+rule_files:
+  - ../../.rules-build/gateway.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # --- SLIs ---------------------------------------------------------------------
+  - name: healthy traffic has zero error and slow ratios, and no alerts
+    interval: 1m
+    input_series:
+      - series: 'gateway_request_duration_seconds_count{code="200"}'
+        values: "0+60x90"
+      - series: 'gateway_request_duration_seconds_bucket{code="200", le="1.0"}'
+        values: "0+60x90"
+      - series: 'gateway_request_duration_seconds_count{code="422"}'
+        values: "0+6x90" # callers' mistakes count as good
+    promql_expr_test:
+      - expr: gateway:errors:ratio_rate1h
+        eval_time: 80m
+        exp_samples:
+          - labels: 'gateway:errors:ratio_rate1h'
+            value: 0
+      - expr: gateway:slow:ratio_rate1h
+        eval_time: 80m
+        exp_samples:
+          - labels: 'gateway:slow:ratio_rate1h'
+            value: 0
+    alert_rule_test:
+      - eval_time: 80m
+        alertname: GatewayAvailabilityBurnFast
+        exp_alerts: []
+      - eval_time: 80m
+        alertname: GatewayLatencyBurnFast
+        exp_alerts: []
+
+  - name: no traffic means no SLI series, not a false 0% or 100%
+    interval: 1m
+    input_series:
+      - series: 'gateway_request_duration_seconds_count{code="200"}'
+        values: "5x90"
+      - series: 'gateway_request_duration_seconds_bucket{code="200", le="1.0"}'
+        values: "5x90"
+    promql_expr_test:
+      - expr: gateway:errors:ratio_rate1h
+        eval_time: 80m
+        exp_samples: []
+      - expr: gateway:slow:ratio_rate1h
+        eval_time: 80m
+        exp_samples: []
+
+  - name: 7-day attainment
+    interval: 1m
+    input_series:
+      - series: 'gateway_request_duration_seconds_count{code="200"}'
+        values: "0+57x60"
+      - series: 'gateway_request_duration_seconds_count{code="503"}'
+        values: "0+3x60"
+      - series: 'gateway_request_duration_seconds_bucket{code="200", le="1.0"}'
+        values: "0+54x60" # 54 of 57 successful requests within 1 s
+    promql_expr_test:
+      - expr: gateway:availability:7d
+        eval_time: 60m
+        exp_samples:
+          - labels: 'gateway:availability:7d'
+            value: 0.95
+      - expr: gateway:latency_good:7d
+        eval_time: 60m
+        exp_samples:
+          - labels: 'gateway:latency_good:7d'
+            value: 0.9473684210526315
+
+  # --- availability burn ------------------------------------------------------------
+  - name: an outage with traffic pages (fast burn)
+    interval: 1m
+    input_series:
+      - series: 'gateway_request_duration_seconds_count{code="200"}'
+        values: "0x90"
+      - series: 'gateway_request_duration_seconds_count{code="503"}'
+        values: "0+60x90"
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: GatewayAvailabilityBurnFast
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              slo: embeddings-availability
+            exp_annotations:
+              summary: "Embeddings API is failing requests (fast error-budget burn)"
+              description: "100% of requests in the last hour got a 5xx (objective: at most 1% over 7 days)."
+              runbook_url: https://github.com/ctibenkana/protein-inference-platform/blob/main/docs/runbooks/GatewayAvailabilityBurn.md
+      # With no successful requests there is no latency SLI to burn.
+      - eval_time: 70m
+        alertname: GatewayLatencyBurnFast
+        exp_alerts: []
+
+  - name: failures at low traffic don't page (minimum-traffic guard)
+    interval: 1m
+    input_series:
+      # One failing request every 5 minutes: 100% errors, 12 per hour.
+      - series: 'gateway_request_duration_seconds_count{code="503"}'
+        values: "0+0.2x90"
+    alert_rule_test:
+      - eval_time: 80m
+        alertname: GatewayAvailabilityBurnFast
+        exp_alerts: []
+
+  - name: steady 8% errors burns slowly, not fast
+    interval: 1m
+    input_series:
+      - series: 'gateway_request_duration_seconds_count{code="200"}'
+        values: "0+46x400"
+      - series: 'gateway_request_duration_seconds_count{code="503"}'
+        values: "0+4x400"
+    alert_rule_test:
+      - eval_time: 390m
+        alertname: GatewayAvailabilityBurnFast
+        exp_alerts: []
+      - eval_time: 390m
+        alertname: GatewayAvailabilityBurnSlow
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              slo: embeddings-availability
+            exp_annotations:
+              summary: "Embeddings API availability is degrading (slow error-budget burn)"
+              description: "8% of requests in the last 6 hours got a 5xx (objective: at most 1% over 7 days)."
+              runbook_url: https://github.com/ctibenkana/protein-inference-platform/blob/main/docs/runbooks/GatewayAvailabilityBurn.md
+
+  # --- latency burn -----------------------------------------------------------------
+  - name: successful but slow requests page (fast burn)
+    interval: 1m
+    input_series:
+      - series: 'gateway_request_duration_seconds_count{code="200"}'
+        values: "0+60x90"
+      - series: 'gateway_request_duration_seconds_bucket{code="200", le="1.0"}'
+        values: "0+12x90" # only 20% within 1 s
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: GatewayLatencyBurnFast
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              slo: embeddings-latency
+            exp_annotations:
+              summary: "Embeddings API is slow (fast error-budget burn)"
+              description: "80% of successful requests in the last hour took over 1 s (objective: at most 5% over 7 days)."
+              runbook_url: https://github.com/ctibenkana/protein-inference-platform/blob/main/docs/runbooks/GatewayLatencyBurn.md
+      - eval_time: 70m
+        alertname: GatewayAvailabilityBurnFast
+        exp_alerts: []
+
+  # --- service down ------------------------------------------------------------------
+  - name: a container down for 5 minutes alerts
+    interval: 1m
+    input_series:
+      - series: 'up{namespace="inference", pod="embedding-service-a", container="gateway"}'
+        values: "1x20"
+      - series: 'up{namespace="inference", pod="embedding-service-a", container="model-server"}'
+        values: "1 1 1 0x17"
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: EmbeddingServiceDown
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: EmbeddingServiceDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "Embedding service is down"
+              description: "Fewer than both containers (gateway, model server) of the embedding service have been up for 5 minutes; the embeddings API is probably unavailable."
+              runbook_url: https://github.com/ctibenkana/protein-inference-platform/blob/main/docs/runbooks/EmbeddingServiceDown.md
+
+  - name: no embedding service scraped at all alerts too
+    interval: 1m
+    input_series:
+      - series: 'up{namespace="monitoring", container="prometheus"}'
+        values: "1x10"
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: EmbeddingServiceDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "Embedding service is down"
+              description: "Fewer than both containers (gateway, model server) of the embedding service have been up for 5 minutes; the embeddings API is probably unavailable."
+              runbook_url: https://github.com/ctibenkana/protein-inference-platform/blob/main/docs/runbooks/EmbeddingServiceDown.md
+
+  - name: healthy service doesn't alert
+    interval: 1m
+    input_series:
+      - series: 'up{namespace="inference", pod="embedding-service-a", container="gateway"}'
+        values: "1x20"
+      - series: 'up{namespace="inference", pod="embedding-service-a", container="model-server"}'
+        values: "1x20"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: EmbeddingServiceDown
+        exp_alerts: []
