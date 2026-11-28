@@ -1,6 +1,6 @@
 # Design: inference gateway
 
-**Status:** proposed · **Owner:** platform · **Last updated:** 2026-11-28
+**Status:** steps 1–3 built · **Owner:** platform · **Last updated:** 2026-11-28
 
 ## Problem
 
@@ -89,22 +89,54 @@ Each request is split into one work item per sequence. Items wait in one
 queue, and a dispatcher forms a batch whenever a backend slot is free and
 either:
 
-- the queued items fill the **token budget** (batch size × (longest + 2) ≤
-  `max_batch_tokens`, the same rule as the batch job), or
-- the **oldest item has waited `max_wait`** (default 25 ms).
+- the queued tokens could fill the **token budget** (batch size × (longest
+  + 2) ≤ `max_batch_tokens`, default 8,192, the same rule as the batch job), or
+- the **oldest item has waited `max_wait`** (default 10 ms).
 
-**Which items go together (`length_aware`):** the oldest item anchors the
-batch; then items whose length is closest to the batch's current range are
-added while the budget allows. Anchoring on the oldest item means long
-sequences can't be starved by a stream of short ones; filling by length
-keeps padding low.
+While every slot is busy, nothing is sent, so batches fill up by themselves
+under load; at low load a lone request waits at most `max_wait`.
 
-**Baseline (`fifo`):** items in arrival order up to the same budget. Both
-policies are selectable at start-up so they can be compared under the same
-load, as the batch job compares `fixed` with `token_budget`.
+**Which items go together (`length-aware`):** the oldest item anchors the
+batch; then, repeatedly, the item that adds the least padding joins, as long
+as the batch stays within the token budget **and its padding stays within
+`max_padding`** (default 10%). Consequences, each checked by a property test:
+
+- *No starvation.* Every batch contains the oldest item left, so each item
+  runs after at most as many batches as there are items ahead of it.
+- *Padding bounded by construction.* No batch exceeds the cap, so total
+  padding can't either: with the cap at 10%, the platform's 10% padding SLO
+  holds for live traffic whatever the mix of lengths.
+- *Full batches.* When a batch is sent, nothing left in the queue could have
+  joined it within the limits.
+
+The cap matters for mixed queues: without it, a 1,000-residue protein at the
+front would take a handful of 50-residue proteins along, and about 95% of
+that batch would be padding. With it, they wait for a batch of their own.
+
+**Baseline (`fifo`):** items in arrival order up to the same token budget, no
+padding cap. Both policies are selectable at start-up (`--batching`) so they
+can be compared under the same load, as the batch job compares `fixed` with
+`token_budget`.
 
 A request's response is sent when all of its items are done, so a request
-can span several batches.
+can span several batches, and each item's result is routed back through its
+own channel, so batches can mix requests.
+
+**First measurement** (laptop CPU, ESM-2 8M with 4 threads, one gateway, 300
+human proteins sent as 300 simultaneous single-sequence requests, two runs
+each in opposite orders):
+
+| Policy | Padding | All 300 done | Median latency | p99 latency |
+|---|---|---|---|---|
+| fifo | 43–44% | 31–40 s | 15–21 s | 31–39 s |
+| length-aware | 4.4–4.7% | 15.4 s | 6.3–6.4 s | 15 s |
+
+Systematic load tests (arrival rates, `max_wait`, larger models) are step 5.
+
+**Known limit:** each gateway replica batches on its own. With two replicas
+and one model server, two batches can arrive at once and the second waits
+inside the model server. A shared queue, or routing to model-server replicas
+directly, would fix that when there are enough users to matter.
 
 ## Overload and failure
 

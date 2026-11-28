@@ -17,8 +17,9 @@ use base64::engine::general_purpose::STANDARD as B64;
 use serde::{Deserialize, Serialize};
 use tokio::time::Instant;
 
-use crate::backend::{Backend, BackendError, BatchOutput};
-use crate::metrics::{CodeLabel, Metrics, OutcomeLabel};
+use crate::backend::{Backend, BackendError};
+use crate::metrics::{CodeLabel, Metrics};
+use crate::scheduler::{self, Row, Scheduler};
 use crate::validate::{self, Invalid, Limits};
 
 /// Largest request body accepted: 64k residues plus JSON overhead, with room.
@@ -42,21 +43,28 @@ impl Default for Timeouts {
 }
 
 pub struct AppState {
-    pub backend: Backend,
     pub limits: Limits,
     pub timeouts: Timeouts,
-    pub metrics: Metrics,
+    pub metrics: Arc<Metrics>,
+    pub scheduler: Scheduler,
     /// Set on SIGTERM: readiness fails so Kubernetes stops routing here.
     pub shutting_down: AtomicBool,
 }
 
 impl AppState {
-    pub fn new(backend: Backend, limits: Limits, timeouts: Timeouts) -> Self {
+    /// Starts the batch dispatcher, so it must be called inside a Tokio runtime.
+    pub fn new(
+        backend: Backend,
+        limits: Limits,
+        timeouts: Timeouts,
+        batching: scheduler::Config,
+    ) -> Self {
+        let metrics = Arc::new(Metrics::new(batching.policy.as_str()));
         Self {
-            backend,
             limits,
             timeouts,
-            metrics: Metrics::new(),
+            scheduler: Scheduler::start(backend, batching, metrics.clone()),
+            metrics,
             shutting_down: AtomicBool::new(false),
         }
     }
@@ -262,16 +270,26 @@ async fn embeddings(
     s.metrics.sequences.inc_by(usage.sequences as u64);
     s.metrics.residues.inc_by(usage.residues as u64);
 
-    let out = run_batch(&s, &req.sequences, deadline).await?;
+    let format = req.encoding_format;
+    let pending: Vec<_> = req
+        .sequences
+        .into_iter()
+        .map(|seq| s.scheduler.submit(seq, deadline))
+        .collect();
+    let rows = tokio::time::timeout_at(deadline, collect(pending))
+        .await
+        .unwrap_or_else(|_| Err(backend_error(&BackendError::Timeout)))?;
 
-    let data = (0..out.vectors.len() / out.dim)
-        .map(|index| {
-            let row = out.row(index);
-            let embedding = match req.encoding_format {
-                EncodingFormat::Float => Embedding::Float(row),
+    let data = rows
+        .iter()
+        .enumerate()
+        .map(|(index, row)| {
+            let embedding = match format {
+                EncodingFormat::Float => Embedding::Float(row.embedding()),
                 EncodingFormat::Base64 => Embedding::Base64(
                     B64.encode(
-                        row.iter()
+                        row.embedding()
+                            .iter()
                             .flat_map(|v| v.to_le_bytes())
                             .collect::<Vec<u8>>(),
                     ),
@@ -280,9 +298,10 @@ async fn embeddings(
             Item { index, embedding }
         })
         .collect();
+    let first = &rows[0].batch;
     let mut resp = axum::Json(EmbedResponse {
-        model: &out.model,
-        dim: out.dim,
+        model: &first.model,
+        dim: first.dim,
         data,
         usage,
     })
@@ -291,53 +310,26 @@ async fn embeddings(
     Ok(resp)
 }
 
-/// Sends the sequences as one batch, retrying once on failures that another
-/// attempt could fix, within the request's deadline.
-async fn run_batch(
-    s: &AppState,
-    seqs: &[String],
-    deadline: Instant,
-) -> Result<BatchOutput, ApiError> {
-    let lengths = || seqs.iter().map(String::len);
-    let mut attempt = 0;
-    loop {
-        attempt += 1;
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Err(backend_error(&BackendError::Timeout));
-        }
-        let started = Instant::now();
-        let result = s.backend.embed(seqs, remaining).await;
-        let outcome = match &result {
-            Ok(_) => "ok",
-            Err(e) => e.kind(),
-        };
-        s.metrics
-            .backend
-            .get_or_create(&OutcomeLabel { outcome })
-            .observe(started.elapsed().as_secs_f64());
-
-        match result {
-            Ok(out) => {
-                let padded = validate::padded_tokens(lengths());
-                s.metrics.batch_sequences.observe(seqs.len() as f64);
-                s.metrics.tokens_computed.inc_by(padded as u64);
-                s.metrics
-                    .pad_tokens
-                    .inc_by((padded - validate::real_tokens(lengths())) as u64);
-                return Ok(out);
-            }
-            Err(e) if e.retryable() && attempt < 2 => {
-                tracing::warn!(error = %e, "model server call failed; retrying once");
-            }
-            Err(e) => {
-                if !e.retryable() && !matches!(e, BackendError::Timeout) {
-                    tracing::error!(error = %e, "model server call failed");
-                }
-                return Err(backend_error(&e));
+/// Waits for every sequence of a request, in request order. Returning early
+/// drops the remaining receivers, which cancels their queued items.
+async fn collect(
+    pending: Vec<tokio::sync::oneshot::Receiver<scheduler::Reply>>,
+) -> Result<Vec<Row>, ApiError> {
+    let mut rows = Vec::with_capacity(pending.len());
+    for rx in pending {
+        match rx.await {
+            Ok(Ok(row)) => rows.push(row),
+            Ok(Err(e)) => return Err(backend_error(&e)),
+            Err(_) => {
+                return Err(ApiError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal",
+                    "internal error",
+                ));
             }
         }
     }
+    Ok(rows)
 }
 
 /// Readiness reflects only the gateway itself. If it followed the model

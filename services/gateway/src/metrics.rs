@@ -18,13 +18,24 @@ pub struct OutcomeLabel {
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
-pub struct VersionLabel {
-    pub version: &'static str,
+pub struct TriggerLabel {
+    pub trigger: &'static str,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct DropLabel {
+    pub reason: &'static str,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
+struct InfoLabel {
+    version: &'static str,
+    policy: &'static str,
 }
 
 type HistogramFamily<L> = Family<L, Histogram, fn() -> Histogram>;
 
-// Embedding requests on CPU take tens of milliseconds to tens of seconds.
+/// Embedding requests on CPU take tens of milliseconds to tens of seconds.
 fn latency_buckets() -> Histogram {
     Histogram::new([
         0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0,
@@ -35,88 +46,124 @@ pub struct Metrics {
     registry: Registry,
     /// Completed `/v1/embeddings` requests by HTTP status.
     pub requests: HistogramFamily<CodeLabel>,
+    /// Requests currently being handled.
+    pub in_flight: Gauge,
     /// Sequences and residues accepted for embedding.
     pub sequences: Counter,
     pub residues: Counter,
-    /// Calls to the model server by outcome.
-    pub backend: HistogramFamily<OutcomeLabel>,
-    /// Batches sent, and their size.
+    /// Items waiting to be batched, and their tokens.
+    pub queue_items: Gauge,
+    pub queue_tokens: Gauge,
+    /// Time from arrival to being put in a batch.
+    pub queue_wait: Histogram,
+    /// Items removed from the queue without being run.
+    pub dropped: Family<DropLabel, Counter>,
+    /// Batches sent, by what triggered them.
+    pub batch_trigger: Family<TriggerLabel, Counter>,
+    /// Sequences per batch.
     pub batch_sequences: Histogram,
     /// Token positions computed, and how many of them were padding.
     pub tokens_computed: Counter,
     pub pad_tokens: Counter,
-    /// Requests currently being handled.
-    pub in_flight: Gauge,
+    /// Calls to the model server by outcome.
+    pub backend: HistogramFamily<OutcomeLabel>,
 }
 
 impl Metrics {
-    pub fn new() -> Self {
-        let requests = HistogramFamily::<CodeLabel>::new_with_constructor(latency_buckets);
-        let backend = HistogramFamily::<OutcomeLabel>::new_with_constructor(latency_buckets);
-        let batch_sequences = Histogram::new([1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0, 256.0]);
-        let (sequences, residues) = (Counter::default(), Counter::default());
-        let (tokens_computed, pad_tokens) = (Counter::default(), Counter::default());
-        let in_flight = Gauge::default();
-        let info = Family::<VersionLabel, Gauge>::default();
-        info.get_or_create(&VersionLabel {
+    pub fn new(policy: &'static str) -> Self {
+        let m = Self {
+            registry: Registry::with_prefix("gateway"),
+            requests: HistogramFamily::new_with_constructor(latency_buckets),
+            in_flight: Gauge::default(),
+            sequences: Counter::default(),
+            residues: Counter::default(),
+            queue_items: Gauge::default(),
+            queue_tokens: Gauge::default(),
+            queue_wait: Histogram::new([
+                0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0,
+            ]),
+            dropped: Family::default(),
+            batch_trigger: Family::default(),
+            batch_sequences: Histogram::new([1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0, 256.0]),
+            tokens_computed: Counter::default(),
+            pad_tokens: Counter::default(),
+            backend: HistogramFamily::new_with_constructor(latency_buckets),
+        };
+        let info = Family::<InfoLabel, Gauge>::default();
+        info.get_or_create(&InfoLabel {
             version: env!("CARGO_PKG_VERSION"),
+            policy,
         })
         .set(1);
 
-        let mut r = Registry::with_prefix("gateway");
+        let mut r = m.registry;
         r.register(
             "request_duration_seconds",
             "Embedding requests by HTTP status.",
-            requests.clone(),
-        );
-        r.register(
-            "sequences",
-            "Sequences accepted for embedding.",
-            sequences.clone(),
-        );
-        r.register(
-            "residues",
-            "Residues accepted for embedding.",
-            residues.clone(),
-        );
-        r.register(
-            "backend_request_duration_seconds",
-            "Calls to the model server by outcome.",
-            backend.clone(),
-        );
-        r.register(
-            "batch_sequences",
-            "Sequences per batch sent to the model server.",
-            batch_sequences.clone(),
-        );
-        r.register(
-            "tokens_computed",
-            "Token positions computed, including padding.",
-            tokens_computed.clone(),
-        );
-        r.register(
-            "pad_tokens",
-            "Token positions spent on padding.",
-            pad_tokens.clone(),
+            m.requests.clone(),
         );
         r.register(
             "requests_in_flight",
             "Embedding requests being handled.",
-            in_flight.clone(),
+            m.in_flight.clone(),
         );
-        r.register("build_info", "Gateway version.", info);
-
-        Self {
-            registry: r,
-            requests,
-            sequences,
-            residues,
-            backend,
-            batch_sequences,
-            tokens_computed,
-            pad_tokens,
-            in_flight,
-        }
+        r.register(
+            "sequences",
+            "Sequences accepted for embedding.",
+            m.sequences.clone(),
+        );
+        r.register(
+            "residues",
+            "Residues accepted for embedding.",
+            m.residues.clone(),
+        );
+        r.register(
+            "queue_items",
+            "Sequences waiting to be batched.",
+            m.queue_items.clone(),
+        );
+        r.register(
+            "queue_tokens",
+            "Tokens (residues plus special tokens) waiting to be batched.",
+            m.queue_tokens.clone(),
+        );
+        r.register(
+            "queue_wait_seconds",
+            "Time from arrival to being put in a batch.",
+            m.queue_wait.clone(),
+        );
+        r.register(
+            "dropped",
+            "Queued sequences dropped without running, by reason.",
+            m.dropped.clone(),
+        );
+        r.register(
+            "batches",
+            "Batches sent to the model server, by trigger.",
+            m.batch_trigger.clone(),
+        );
+        r.register(
+            "batch_sequences",
+            "Sequences per batch sent to the model server.",
+            m.batch_sequences.clone(),
+        );
+        r.register(
+            "tokens_computed",
+            "Token positions computed, including padding.",
+            m.tokens_computed.clone(),
+        );
+        r.register(
+            "pad_tokens",
+            "Token positions spent on padding.",
+            m.pad_tokens.clone(),
+        );
+        r.register(
+            "backend_request_duration_seconds",
+            "Calls to the model server by outcome.",
+            m.backend.clone(),
+        );
+        r.register("build_info", "Gateway version and batching policy.", info);
+        Self { registry: r, ..m }
     }
 
     pub fn render(&self) -> String {
@@ -124,11 +171,5 @@ impl Metrics {
         prometheus_client::encoding::text::encode(&mut out, &self.registry)
             .expect("writing to a String cannot fail");
         out
-    }
-}
-
-impl Default for Metrics {
-    fn default() -> Self {
-        Self::new()
     }
 }

@@ -1,131 +1,22 @@
 //! The gateway's HTTP API against a fake model server on a real socket.
 
+mod common;
+
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use axum::body::Body;
-use axum::extract::State;
 use axum::http::{Request, StatusCode};
-use axum::routing::post;
-use axum::{Json, Router};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
-use http_body_util::BodyExt;
-use serde_json::{Value, json};
-use tower::ServiceExt;
+use serde_json::json;
 
+use common::*;
 use gateway::api::{self, AppState, Timeouts};
 use gateway::backend::Backend;
+use gateway::batcher::Policy;
 use gateway::validate::Limits;
-
-const SECRET: &str = "MKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQ";
-
-/// Behaviour of the fake model server.
-#[derive(Default)]
-struct Fake {
-    calls: AtomicUsize,
-    /// Answer this many calls with HTTP 503 before succeeding.
-    fail_first: AtomicUsize,
-    /// Sleep this long before answering.
-    delay_ms: AtomicUsize,
-    /// Return one embedding too few.
-    short_reply: AtomicBool,
-}
-
-/// Embedding of a sequence: (length, number of A, 1.0).
-fn fake_vector(s: &str) -> [f32; 3] {
-    [s.len() as f32, s.matches('A').count() as f32, 1.0]
-}
-
-async fn fake_batch(
-    State(f): State<Arc<Fake>>,
-    Json(body): Json<Value>,
-) -> (StatusCode, Json<Value>) {
-    f.calls.fetch_add(1, Ordering::SeqCst);
-    tokio::time::sleep(Duration::from_millis(
-        f.delay_ms.load(Ordering::SeqCst) as u64
-    ))
-    .await;
-    if f.fail_first.load(Ordering::SeqCst) > 0 {
-        f.fail_first.fetch_sub(1, Ordering::SeqCst);
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({"error": "model is still loading"})),
-        );
-    }
-    let mut seqs: Vec<String> = serde_json::from_value(body["sequences"].clone()).unwrap();
-    if f.short_reply.load(Ordering::SeqCst) {
-        seqs.pop();
-    }
-    let bytes: Vec<u8> = seqs
-        .iter()
-        .flat_map(|s| fake_vector(s))
-        .flat_map(f32::to_le_bytes)
-        .collect();
-    (
-        StatusCode::OK,
-        Json(
-            json!({"model": "fake@1", "dim": 3, "count": seqs.len(), "embeddings": B64.encode(bytes)}),
-        ),
-    )
-}
-
-/// Starts a fake model server and a gateway pointed at it.
-async fn setup() -> (Router, Arc<Fake>, Arc<AppState>) {
-    setup_with(Limits::default()).await
-}
-
-async fn setup_with(limits: Limits) -> (Router, Arc<Fake>, Arc<AppState>) {
-    let fake = Arc::new(Fake::default());
-    let app = Router::new()
-        .route("/v1/batch", post(fake_batch))
-        .with_state(fake.clone());
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(axum::serve(listener, app).into_future());
-
-    let state = Arc::new(AppState::new(
-        Backend::new(&format!("http://{addr}")),
-        limits,
-        Timeouts {
-            default: Duration::from_secs(5),
-            max: Duration::from_secs(10),
-        },
-    ));
-    (api::router(state.clone()), fake, state)
-}
-
-struct Reply {
-    status: StatusCode,
-    headers: axum::http::HeaderMap,
-    body: Value,
-}
-
-async fn send(app: &Router, req: Request<Body>) -> Reply {
-    let resp = app.clone().oneshot(req).await.unwrap();
-    let status = resp.status();
-    let headers = resp.headers().clone();
-    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
-    let body = serde_json::from_slice(&bytes)
-        .unwrap_or(Value::String(String::from_utf8_lossy(&bytes).into()));
-    Reply {
-        status,
-        headers,
-        body,
-    }
-}
-
-fn embed_req(body: &Value) -> Request<Body> {
-    Request::post("/v1/embeddings")
-        .header("content-type", "application/json")
-        .body(Body::from(body.to_string()))
-        .unwrap()
-}
-
-async fn embed(app: &Router, body: Value) -> Reply {
-    send(app, embed_req(&body)).await
-}
 
 // --- happy path ----------------------------------------------------------------
 
@@ -156,11 +47,8 @@ async fn returns_embeddings_in_request_order() {
             fake_vector("M").to_vec()
         ]
     );
-    assert_eq!(
-        fake.calls.load(Ordering::SeqCst),
-        1,
-        "one request is one batch"
-    );
+    // 1 would add 22% padding to the batch of 4 and 3, so it runs separately.
+    assert_eq!(fake.batches(), [vec!["MKTA", "MAA"], vec!["M"]]);
 }
 
 #[tokio::test]
@@ -205,11 +93,14 @@ async fn request_id_is_echoed_or_generated() {
 
 #[tokio::test]
 async fn invalid_requests_never_reach_the_model() {
-    let (app, fake, _) = setup_with(Limits {
-        max_sequences: 2,
-        max_request_residues: 100,
-        max_residues: 50,
-    })
+    let (app, fake, _) = setup_with(
+        Limits {
+            max_sequences: 2,
+            max_request_residues: 100,
+            max_residues: 50,
+        },
+        batching(Policy::LengthAware),
+    )
     .await;
     let cases = [
         (json!({"sequences": []}), 400, "no_sequences"),
@@ -322,6 +213,7 @@ async fn unreachable_model_server_is_503() {
         Backend::new("http://127.0.0.1:9"),
         Limits::default(),
         Timeouts::default(),
+        batching(Policy::LengthAware),
     ));
     let r = embed(&api::router(state), json!({"sequences": ["MK"]})).await;
     assert_eq!(r.status, StatusCode::SERVICE_UNAVAILABLE);
@@ -386,8 +278,8 @@ async fn readiness_ignores_model_server_but_follows_shutdown() {
 #[tokio::test]
 async fn metrics_record_padding_and_outcomes() {
     let (app, fake, state) = setup().await;
-    // Lengths 10 and 4: 2 x (10 + 2) = 24 tokens computed, 18 real, 6 padding.
-    embed(&app, json!({"sequences": ["M".repeat(10), "MKTA"]})).await;
+    // Lengths 10 and 9: 2 x (10 + 2) = 24 tokens computed, 23 real, 1 padding.
+    embed(&app, json!({"sequences": ["M".repeat(10), "M".repeat(9)]})).await;
     fake.fail_first.store(5, Ordering::SeqCst);
     embed(&app, json!({"sequences": ["MK"]})).await;
     embed(&app, json!({"sequences": []})).await;
@@ -395,9 +287,11 @@ async fn metrics_record_padding_and_outcomes() {
     let text = state.metrics.render();
     for line in [
         "gateway_tokens_computed_total 24",
-        "gateway_pad_tokens_total 6",
+        "gateway_pad_tokens_total 1",
         "gateway_sequences_total 3",
-        "gateway_residues_total 16",
+        "gateway_residues_total 21",
+        "gateway_batches_total{trigger=\"max_wait\"} 2",
+        "gateway_queue_items 0",
         "gateway_request_duration_seconds_count{code=\"200\"} 1",
         "gateway_request_duration_seconds_count{code=\"503\"} 1",
         "gateway_request_duration_seconds_count{code=\"400\"} 1",

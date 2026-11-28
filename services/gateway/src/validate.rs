@@ -119,18 +119,6 @@ pub fn validate(sequences: &mut [String], limits: &Limits) -> Result<usize, Inva
     Ok(total)
 }
 
-/// Token positions a batch computes: every sequence is padded to the longest.
-pub fn padded_tokens(lengths: impl IntoIterator<Item = usize> + Clone) -> usize {
-    let n = lengths.clone().into_iter().count();
-    let longest = lengths.into_iter().max().unwrap_or(0);
-    n * (longest + SPECIAL_TOKENS)
-}
-
-/// Token positions holding real input (residues plus special tokens).
-pub fn real_tokens(lengths: impl IntoIterator<Item = usize>) -> usize {
-    lengths.into_iter().map(|l| l + SPECIAL_TOKENS).sum()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -207,13 +195,5 @@ mod tests {
                 .to_string();
             assert!(!msg.contains(SECRET), "{msg}");
         }
-    }
-
-    #[test]
-    fn token_accounting_matches_the_batch_job() {
-        // Same numbers as esm_embed.batching.Batch: lengths 10 and 4.
-        assert_eq!(padded_tokens([10, 4]), 24);
-        assert_eq!(real_tokens([10, 4]), 18);
-        assert_eq!(padded_tokens(Vec::<usize>::new()), 0);
     }
 }

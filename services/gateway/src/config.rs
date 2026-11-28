@@ -6,7 +6,9 @@ use std::time::Duration;
 use clap::{Parser, ValueEnum};
 
 use crate::api::Timeouts;
-use crate::validate::Limits;
+use crate::batcher::{Budget, Policy};
+use crate::scheduler;
+use crate::validate::{Limits, SPECIAL_TOKENS};
 
 #[derive(Parser, Debug)]
 #[command(version, about = "Inference gateway for protein embeddings")]
@@ -48,6 +50,30 @@ pub struct Config {
     #[arg(long, env = "GATEWAY_SHUTDOWN_DELAY", default_value_t = 5.0)]
     pub shutdown_delay: f64,
 
+    /// How queued sequences are grouped into batches.
+    #[arg(long, env = "GATEWAY_BATCHING", value_enum, default_value_t = Policy::LengthAware)]
+    pub batching: Policy,
+
+    /// Padded token positions per batch: batch size x (longest + 2).
+    #[arg(long, env = "GATEWAY_MAX_BATCH_TOKENS", default_value_t = 8_192)]
+    pub max_batch_tokens: usize,
+
+    /// Sequences per batch (the model server accepts up to 256).
+    #[arg(long, env = "GATEWAY_MAX_BATCH_SEQUENCES", default_value_t = 256)]
+    pub max_batch_sequences: usize,
+
+    /// Highest share of a length-aware batch that may be padding.
+    #[arg(long, env = "GATEWAY_MAX_PADDING", default_value_t = 0.10)]
+    pub max_padding: f64,
+
+    /// Longest a sequence waits for others to share its batch, in milliseconds.
+    #[arg(long, env = "GATEWAY_MAX_WAIT_MS", default_value_t = 10)]
+    pub max_wait_ms: u64,
+
+    /// Batches in flight to the model server at once (its replica count).
+    #[arg(long, env = "GATEWAY_BACKEND_CONCURRENCY", default_value_t = 1)]
+    pub backend_concurrency: usize,
+
     #[arg(long, env = "GATEWAY_LOG_FORMAT", value_enum, default_value_t = LogFormat::Json)]
     pub log_format: LogFormat,
 }
@@ -72,6 +98,39 @@ impl Config {
             default: Duration::from_secs_f64(self.default_timeout),
             max: Duration::from_secs_f64(self.max_timeout),
         }
+    }
+
+    pub fn batching(&self) -> scheduler::Config {
+        scheduler::Config {
+            policy: self.batching,
+            budget: Budget {
+                max_tokens: self.max_batch_tokens,
+                max_sequences: self.max_batch_sequences,
+                max_padding: self.max_padding,
+            },
+            max_wait: Duration::from_millis(self.max_wait_ms),
+            concurrency: self.backend_concurrency,
+        }
+    }
+
+    /// Settings that can't work together.
+    pub fn check(&self) -> Result<(), String> {
+        let longest = self.max_residues + SPECIAL_TOKENS;
+        if self.max_batch_tokens < longest {
+            return Err(format!(
+                "--max-batch-tokens ({}) must fit one sequence of --max-residues ({longest} tokens)",
+                self.max_batch_tokens
+            ));
+        }
+        if !(0.0..1.0).contains(&self.max_padding) {
+            return Err("--max-padding must be at least 0 and below 1".into());
+        }
+        if self.max_batch_sequences == 0 || self.backend_concurrency == 0 {
+            return Err(
+                "--max-batch-sequences and --backend-concurrency must be at least 1".into(),
+            );
+        }
+        Ok(())
     }
 
     pub fn shutdown_delay(&self) -> Duration {

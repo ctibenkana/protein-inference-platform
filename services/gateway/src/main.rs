@@ -12,6 +12,10 @@ use gateway::config::{Config, LogFormat};
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     let cfg = Config::parse();
+    if let Err(msg) = cfg.check() {
+        eprintln!("error: {msg}");
+        std::process::exit(2);
+    }
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     match cfg.log_format {
         LogFormat::Json => tracing_subscriber::fmt()
@@ -26,6 +30,7 @@ async fn main() -> std::io::Result<()> {
         Backend::new(&cfg.backend_url),
         cfg.limits(),
         cfg.timeouts(),
+        cfg.batching(),
     ));
     let api_listener = TcpListener::bind(cfg.listen).await?;
     let metrics_listener = TcpListener::bind(cfg.metrics_listen).await?;
@@ -34,6 +39,10 @@ async fn main() -> std::io::Result<()> {
         listen = %cfg.listen,
         metrics = %cfg.metrics_listen,
         backend = %cfg.backend_url,
+        batching = cfg.batching.as_str(),
+        max_batch_tokens = cfg.max_batch_tokens,
+        max_padding = cfg.max_padding,
+        max_wait_ms = cfg.max_wait_ms,
         "gateway started"
     );
 

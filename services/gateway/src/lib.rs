@@ -6,6 +6,8 @@
 
 pub mod api;
 pub mod backend;
+pub mod batcher;
 pub mod config;
 pub mod metrics;
+pub mod scheduler;
 pub mod validate;
