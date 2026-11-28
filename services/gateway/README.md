@@ -7,12 +7,13 @@ batching); the model server only runs the batches it is given.
 
 Design and plan: [docs/design/gateway.md](../../docs/design/gateway.md).
 
-> **Status:** step 5 of 6. Dynamic, length-aware batching across requests:
-> with 300 proteins arriving as 300 simultaneous requests, padding fell from
-> 43% (FIFO) to under 5% and all requests finished 2–2.6× sooner. A bounded
-> queue refuses excess work in milliseconds, and shutdown drains within a
-> time limit. Open-loop load tests: length-aware batching carries 3–4× the
-> load of FIFO at the same latency ([results](../../docs/benchmarks/gateway-load-tests.md)).
+> **Status:** all 6 steps of the [plan](../../docs/design/gateway.md#implementation-plan) built
+> and running on the local cluster. Length-aware batching carries 3–4× the
+> load of FIFO at the same latency ([load tests](../../docs/benchmarks/gateway-load-tests.md));
+> a bounded queue refuses excess work in milliseconds; availability and
+> latency SLOs have burn-rate alerts, runbooks and a dashboard
+> ([SLOs](../../docs/slos.md#4-embeddings-api-availability)); dependencies are
+> checked daily with cargo-deny.
 
 ## API
 

@@ -13,11 +13,11 @@ be created or destroyed from code in minutes.
 > running and verified on a local cluster; GKE deployment waits on billing.
 > First workload: [esm-embed](workloads/esm-embed), ESM-2 protein embeddings,
 > where length-aware batching cut padding from 42% to 5% and doubled
-> throughput in a first local run. In progress: a Rust
-> [inference gateway](services/gateway) serving embeddings on request, with
-> dynamic length-aware batching across callers: on live traffic, padding fell
-> from 43% to under 5%, and under continuous load it carries 3–4× the traffic of
-> FIFO batching at the same latency (step 5 of 6). See the [roadmap](#roadmap).
+> throughput in a first local run. Online serving: a Rust
+> [inference gateway](services/gateway) with dynamic length-aware batching
+> across callers, which carries 3–4× the traffic of FIFO batching at the
+> same latency, with availability and latency SLOs, burn-rate alerts and
+> runbooks. See the [roadmap](#roadmap).
 
 ## Architecture
 
@@ -223,7 +223,7 @@ make kind-down
 2. **GitOps** ✅ Argo CD (self-managed), app of apps, pinned Helm charts, CI rendering and schema validation; verified on a local cluster
 3. **Observability** ✅ Prometheus, Grafana, Loki, Alloy; SLOs, alerts and runbooks, unit-tested and verified live (a failed job, a heavily padded run and a leaked sequence each raised their alert in Alertmanager)
 4. **Releases** ✅ multi-arch images on GHCR, Sigstore keyless signing, SBOM and provenance, tag-driven releases
-5. **First workloads:** ESM-2 embedding job ✅ (verified on the local cluster, metrics in Prometheus); inference gateway in Rust, in progress ([design](docs/design/gateway.md)): API, model server, deadlines, retries, network policies ✅, dynamic length-aware batching ✅, overload protection (bounded queue, bounded drain) ✅, open-loop load tests ✅ ([results](docs/benchmarks/gateway-load-tests.md)), SLO alerts and dashboard next; then a small model served with vLLM
+5. **First workloads:** ESM-2 embedding job ✅ (verified on the local cluster, metrics in Prometheus); inference gateway in Rust, in progress ([design](docs/design/gateway.md)): API, model server, deadlines, retries, network policies ✅, dynamic length-aware batching ✅, overload protection (bounded queue, bounded drain) ✅, open-loop load tests ✅ ([results](docs/benchmarks/gateway-load-tests.md)), availability and latency SLOs with burn-rate alerts, runbooks and dashboard ✅, cargo-deny ✅; then a small model served with vLLM
 6. **Spot GPU pool** for benchmark days, scaling to zero
 7. **Cost report:** measured monthly cost and cost per benchmark run
 

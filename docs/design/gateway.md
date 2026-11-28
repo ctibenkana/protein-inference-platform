@@ -1,6 +1,6 @@
 # Design: inference gateway
 
-**Status:** steps 1–5 built · **Owner:** platform · **Last updated:** 2026-11-28
+**Status:** built (steps 1–6) · **Owner:** platform · **Last updated:** 2026-11-28
 
 ## Problem
 
