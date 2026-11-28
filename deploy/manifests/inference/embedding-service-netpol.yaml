@@ -1,0 +1,40 @@
+# Who may call what, on top of the namespace's default-deny ingress
+# (platform-base). Prometheus scraping is allowed there for all pods.
+
+# Only the gateway may call the model server.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: model-server-from-gateway
+  namespace: inference
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: esm-embed-server
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: gateway
+      ports:
+        - { protocol: TCP, port: 8000 }
+---
+# The gateway's API is open to pods in this namespace (clients, the load
+# generator). Access from outside the cluster comes with authentication,
+# when the lab is onboarded.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gateway-from-namespace
+  namespace: inference
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: gateway
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector: {}
+      ports:
+        - { protocol: TCP, port: 8080 }

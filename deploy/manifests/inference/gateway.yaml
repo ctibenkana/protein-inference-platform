@@ -1,0 +1,90 @@
+# Inference gateway: the embeddings API in front of the model server.
+# Design: docs/design/gateway.md
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+  namespace: inference
+  labels: &labels
+    app.kubernetes.io/name: gateway
+    app.kubernetes.io/part-of: embedding-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: gateway
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels: *labels
+    spec:
+      automountServiceAccountToken: false
+      # The gateway fails readiness on SIGTERM, keeps serving for
+      # --shutdown-delay while endpoints update, then drains.
+      terminationGracePeriodSeconds: 45
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway # one node locally
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: gateway
+      containers:
+        - name: gateway
+          image: ghcr.io/ctibenkana/gateway@sha256:9c9a297e90fffdb72aa32ba1c836e15a5a76b6b8b2a286ed9632168d863b9ca6 # sha-5ba3ea3
+          env:
+            - { name: GATEWAY_BACKEND_URL, value: "http://esm-embed-server:8000" }
+            - { name: GATEWAY_SHUTDOWN_DELAY, value: "5" }
+          ports:
+            - { name: http, containerPort: 8080 }
+            - { name: metrics, containerPort: 9100 }
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 5
+            failureThreshold: 2
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            requests: { cpu: 50m, memory: 32Mi }
+            limits: { memory: 128Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway
+  namespace: inference
+  labels:
+    app.kubernetes.io/name: gateway
+    app.kubernetes.io/part-of: embedding-service
+spec:
+  selector:
+    app.kubernetes.io/name: gateway
+  ports:
+    - { name: http, port: 80, targetPort: http }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: gateway
+  namespace: inference
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: gateway

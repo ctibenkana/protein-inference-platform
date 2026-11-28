@@ -1,0 +1,86 @@
+# ESM-2 model server: runs the batches the gateway sends it, one at a time.
+# Only the gateway may call it (see embedding-service-netpol.yaml).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: esm-embed-server
+  namespace: inference
+  labels: &labels
+    app.kubernetes.io/name: esm-embed-server
+    app.kubernetes.io/part-of: embedding-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: esm-embed-server
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0 # keep serving during a rollout
+  template:
+    metadata:
+      labels: *labels
+    spec:
+      automountServiceAccountToken: false
+      # Long enough to finish the batch in progress after SIGTERM.
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: server
+          image: ghcr.io/ctibenkana/esm-embed@sha256:fed8769cc70824b63de524299c9a1ab4048d444f670215944c93ece86becd913 # sha-ec008a5
+          command: ["esm-embed-server"]
+          args:
+            - --port=8000
+            - --metrics-port=9100
+            - --threads=2 # match the CPU request; more threads only contend
+          ports:
+            - { name: http, containerPort: 8000 }
+            - { name: metrics, containerPort: 9100 }
+          # The model loads in the background, so /healthz answers at once
+          # and /readyz turns ready when the model is loaded.
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 5
+            failureThreshold: 2
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          lifecycle:
+            # Let endpoints update before the server stops accepting.
+            preStop:
+              sleep: { seconds: 5 }
+          resources:
+            requests: { cpu: "2", memory: 1Gi }
+            limits: { memory: 2Gi } # no CPU limit: throttling only adds latency
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: esm-embed-server
+  namespace: inference
+  labels:
+    app.kubernetes.io/name: esm-embed-server
+    app.kubernetes.io/part-of: embedding-service
+spec:
+  selector:
+    app.kubernetes.io/name: esm-embed-server
+  ports:
+    - { name: http, port: 8000, targetPort: http }

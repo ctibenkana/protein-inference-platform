@@ -1,0 +1,13 @@
+# Prometheus scrapes the gateway and the model server.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: embedding-service
+  namespace: inference
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/part-of: embedding-service
+  podMetricsEndpoints:
+    - port: metrics
+      interval: 15s
