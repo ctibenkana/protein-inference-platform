@@ -42,7 +42,7 @@ FROM ${PYTHON_IMAGE}
 ARG MODEL_ID=facebook/esm2_t6_8M_UR50D
 ARG MODEL_REVISION=c731040fcd8d73dceaa04b0a8e6329b345b0f5df
 LABEL org.opencontainers.image.title="esm-embed" \
-      org.opencontainers.image.description="Batch ESM-2 protein embeddings" \
+      org.opencontainers.image.description="ESM-2 protein embeddings: batch job and model server" \
       org.opencontainers.image.licenses="Apache-2.0" \
       io.github.esm-embed.model="${MODEL_ID}@${MODEL_REVISION}"
 
@@ -58,9 +58,11 @@ ENV PATH=/opt/venv/bin:$PATH \
     ESM_MODEL=/opt/model \
     HF_HUB_OFFLINE=1 \
     TRANSFORMERS_OFFLINE=1 \
-    HF_HOME=/tmp/hf
+    HF_HOME=/tmp/hf \
+    ESM_MODEL_NAME="${MODEL_ID}@${MODEL_REVISION}"
 
 USER 10001
-EXPOSE 9100
+# 8000: model server API (esm-embed-server); 9100: metrics
+EXPOSE 8000 9100
 ENTRYPOINT ["esm-embed"]
 CMD ["--help"]

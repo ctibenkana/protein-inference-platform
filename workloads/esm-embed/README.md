@@ -47,6 +47,27 @@ Sorting and packing by length cut wasted computation from 42% to 5% and
 doubled throughput, with identical embeddings. This is one run on one machine;
 repeated runs, larger models and GPUs come next.
 
+## Model server
+
+The same image also runs as a long-lived server for on-request embedding. It
+sits behind the platform's [inference gateway](../../docs/design/gateway.md),
+which decides which sequences are batched together; the server only runs the
+batches it is given, one at a time.
+
+```bash
+esm-embed-server --port 8000 --metrics-port 9100
+```
+
+| Endpoint | Meaning |
+|---|---|
+| `POST /v1/batch` | `{"sequences": [...]}` → `{"model", "dim", "count", "embeddings"}`; embeddings are base64 float32 (little-endian, one row per sequence, request order) |
+| `GET /healthz` | process is up |
+| `GET /readyz` | model loaded; 503 while loading |
+
+Invalid batches get 400, 413 or 422, with errors naming the sequence's
+position, never its content. On SIGTERM the server finishes the batch in
+progress before exiting.
+
 ## Privacy
 
 Input sequences may be unpublished research data. The job never logs

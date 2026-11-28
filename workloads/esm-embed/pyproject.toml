@@ -19,6 +19,7 @@ dependencies = [
 
 [project.scripts]
 esm-embed = "esm_embed.cli:main"
+esm-embed-server = "esm_embed.server:main"
 
 [tool.setuptools.dynamic]
 version = { attr = "esm_embed.__version__" }
