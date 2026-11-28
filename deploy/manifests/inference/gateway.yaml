@@ -40,7 +40,7 @@ spec:
               app.kubernetes.io/name: gateway
       containers:
         - name: gateway
-          image: ghcr.io/ctibenkana/gateway@sha256:9c9a297e90fffdb72aa32ba1c836e15a5a76b6b8b2a286ed9632168d863b9ca6 # sha-5ba3ea3
+          image: ghcr.io/ctibenkana/gateway@sha256:59fddd9611cfc4f64e5dfccc07e58054437155effb629e2a4af82dbb0b4488fe # sha-1b9efcd
           env:
             - { name: GATEWAY_BACKEND_URL, value: "http://esm-embed-server:8000" }
             - { name: GATEWAY_SHUTDOWN_DELAY, value: "5" }
