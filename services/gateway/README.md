@@ -7,10 +7,11 @@ batching); the model server only runs the batches it is given.
 
 Design and plan: [docs/design/gateway.md](../../docs/design/gateway.md).
 
-> **Status:** step 3 of 6. Dynamic, length-aware batching across requests:
+> **Status:** step 4 of 6. Dynamic, length-aware batching across requests:
 > with 300 proteins arriving as 300 simultaneous requests, padding fell from
-> 43% (FIFO) to under 5% and all requests finished 2–2.6× sooner. Overload
-> protection (bounded queue, fast rejection) is next.
+> 43% (FIFO) to under 5% and all requests finished 2–2.6× sooner. A bounded
+> queue refuses excess work in milliseconds, and shutdown drains within a
+> time limit. Next: load tests that set the latency SLO.
 
 ## API
 
@@ -35,7 +36,8 @@ curl -s gateway/v1/embeddings -H 'content-type: application/json' \
 | 400 | malformed body or bad timeout header |
 | 413 | over 64 sequences or 65,536 residues in one request |
 | 422 | empty sequence, over 1,022 residues, or not amino-acid letters; the message names the position |
-| 503 + `Retry-After` | model server unavailable (after one retry) |
+| 503 `overloaded` + `Retry-After` | the queue is full; nothing was queued |
+| 503 `backend_unavailable` + `Retry-After` | model server unavailable (after one retry) |
 | 504 | deadline passed |
 
 On the cluster, try it with `make gateway-demo`.
@@ -57,6 +59,8 @@ property tests.
 | `--max-padding` | 0.10 | highest padding share of a length-aware batch |
 | `--max-wait-ms` | 10 | longest a sequence waits for company |
 | `--backend-concurrency` | 1 | batches in flight (model-server replicas) |
+| `--max-queue-tokens` | 131072 | queued tokens before new requests are refused |
+| `--drain-timeout` | 30 | seconds to finish work in progress on shutdown |
 
 ## Behaviour worth knowing
 
@@ -69,9 +73,12 @@ property tests.
 - **Readiness** reflects only the gateway. It doesn't follow the model server:
   otherwise one model-server restart would remove every gateway replica from
   the Service and callers would get connection errors instead of a 503.
+- **Overload.** A request is admitted whole or refused whole, at once, with
+  503 and `Retry-After`; the queue never grows without bound. Clients should
+  retry with backoff.
 - **Shutdown.** On SIGTERM readiness fails at once, the gateway keeps serving
-  for `--shutdown-delay` while endpoints update, then drains in-flight
-  requests.
+  for `--shutdown-delay` while endpoints update, then finishes requests in
+  progress (including queued sequences) for at most `--drain-timeout`.
 - **Metrics** on a separate port (9100): latency by status, queue depth and
   wait, why each batch was sent, dropped items, batch sizes, backend
   outcomes, and tokens computed vs. padding, so the platform's padding SLO

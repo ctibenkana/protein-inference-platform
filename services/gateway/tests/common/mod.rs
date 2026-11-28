@@ -100,6 +100,7 @@ pub fn batching(policy: Policy) -> scheduler::Config {
         },
         max_wait: Duration::from_millis(5),
         concurrency: 1,
+        max_queue_tokens: 131_072,
     }
 }
 

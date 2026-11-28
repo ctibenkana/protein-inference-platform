@@ -1,6 +1,6 @@
 # Design: inference gateway
 
-**Status:** steps 1–3 built · **Owner:** platform · **Last updated:** 2026-11-28
+**Status:** steps 1–4 built · **Owner:** platform · **Last updated:** 2026-11-28
 
 ## Problem
 
@@ -142,15 +142,32 @@ directly, would fix that when there are enough users to matter.
 
 | Situation | Behaviour |
 |---|---|
-| Queue holds more than `max_queue_tokens` | Reject new requests with 503 + `Retry-After` immediately; never queue without bound. |
+| Queue would exceed `max_queue_tokens` | Refused with 503 `overloaded` + `Retry-After` in milliseconds; never queued. |
 | Item's deadline passes while queued | Dropped before it is batched; request gets 504. |
-| Caller disconnects | Its items are skipped when batches are formed. |
-| Backend connection error or 5xx | Retry the batch once (embedding is idempotent), then fail its requests with 503. |
+| Caller disconnects or gives up | Its items are dropped before batching. |
+| Model server connection error or 5xx | The batch is retried once (embedding is idempotent), then every request in it gets 503. |
 | Model server down or loading | Requests get 503 + `Retry-After`. The gateway's own readiness does **not** follow the model server: if it did, one model-server restart would remove every gateway replica from the Service and callers would see connection errors instead of a clear answer. |
-| Shutdown (SIGTERM) | Stop accepting, finish queued work within the grace period. |
+| Shutdown (SIGTERM) | Readiness fails at once; serving continues for `shutdown_delay` while endpoints update; then no new connections, and requests in progress, including their queued sequences, get up to `drain_timeout` to finish. |
 
-Backend concurrency equals the number of model-server replicas, one batch
-each, since a CPU replica gains nothing from two batches at once.
+**Admission control.** Space is reserved for a whole request before any of
+it is queued, so a request is queued completely or not at all. It is counted
+at admission, not when the dispatcher picks items up, so a burst of
+simultaneous requests can't overshoot the limit; space is released as each
+sequence is batched or dropped. A stress test sends 200 simultaneous
+requests at a small queue and checks that every request is answered or
+refused, the model runs exactly the accepted work, and the counter returns
+to zero.
+
+The limit trades latency for accepted work. Same 300-request burst on a
+laptop CPU:
+
+| `max_queue_tokens` | Accepted | Refused | Slowest accepted | Refusal answered within |
+|---|---|---|---|---|
+| 200,000 (holds everything) | 300 | 0 | 8.4 s | n/a |
+| 30,000 | 83 | 217 | 2.0 s | 6 ms |
+
+A deadline-aware limit (refuse what can't finish before its deadline, from
+the measured drain rate) would be the next refinement.
 
 ## Privacy
 

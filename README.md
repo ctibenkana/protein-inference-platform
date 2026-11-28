@@ -16,7 +16,7 @@ be created or destroyed from code in minutes.
 > throughput in a first local run. In progress: a Rust
 > [inference gateway](services/gateway) serving embeddings on request, with
 > dynamic length-aware batching across callers: on live traffic, padding fell
-> from 43% to under 5% (step 3 of 6). See the [roadmap](#roadmap).
+> from 43% to under 5%, and excess load is refused in milliseconds (step 4 of 6). See the [roadmap](#roadmap).
 
 ## Architecture
 
@@ -222,7 +222,7 @@ make kind-down
 2. **GitOps** ✅ Argo CD (self-managed), app of apps, pinned Helm charts, CI rendering and schema validation; verified on a local cluster
 3. **Observability** ✅ Prometheus, Grafana, Loki, Alloy; SLOs, alerts and runbooks, unit-tested and verified live (a failed job, a heavily padded run and a leaked sequence each raised their alert in Alertmanager)
 4. **Releases** ✅ multi-arch images on GHCR, Sigstore keyless signing, SBOM and provenance, tag-driven releases
-5. **First workloads:** ESM-2 embedding job ✅ (verified on the local cluster, metrics in Prometheus); inference gateway in Rust, in progress ([design](docs/design/gateway.md)): API, model server, deadlines, retries, network policies ✅, dynamic length-aware batching ✅, overload protection next; then a small model served with vLLM
+5. **First workloads:** ESM-2 embedding job ✅ (verified on the local cluster, metrics in Prometheus); inference gateway in Rust, in progress ([design](docs/design/gateway.md)): API, model server, deadlines, retries, network policies ✅, dynamic length-aware batching ✅, overload protection (bounded queue, bounded drain) ✅, load tests next; then a small model served with vLLM
 6. **Spot GPU pool** for benchmark days, scaling to zero
 7. **Cost report:** measured monthly cost and cost per benchmark run
 

@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use tokio::time::Instant;
 
 use crate::backend::{Backend, BackendError};
-use crate::metrics::{CodeLabel, Metrics};
+use crate::metrics::{CodeLabel, DropLabel, Metrics};
 use crate::scheduler::{self, Row, Scheduler};
 use crate::validate::{self, Invalid, Limits};
 
@@ -267,6 +267,24 @@ async fn embeddings(
         sequences: req.sequences.len(),
         residues,
     };
+    // Refuse now rather than queue work that would wait too long: a fast
+    // 503 lets the caller back off or go elsewhere.
+    if s.scheduler.admit(&req.sequences).is_err() {
+        s.metrics
+            .rejected
+            .get_or_create(&DropLabel {
+                reason: "queue_full",
+            })
+            .inc();
+        return Err(ApiError {
+            retry_after: Some(1),
+            ..ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "overloaded",
+                "the gateway's queue is full; retry shortly",
+            )
+        });
+    }
     s.metrics.sequences.inc_by(usage.sequences as u64);
     s.metrics.residues.inc_by(usage.residues as u64);
 

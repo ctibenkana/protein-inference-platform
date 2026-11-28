@@ -70,6 +70,16 @@ pub struct Config {
     #[arg(long, env = "GATEWAY_MAX_WAIT_MS", default_value_t = 10)]
     pub max_wait_ms: u64,
 
+    /// Tokens (residues + 2 per sequence) that may wait in the queue; a
+    /// request that would exceed it gets 503 at once instead of waiting.
+    #[arg(long, env = "GATEWAY_MAX_QUEUE_TOKENS", default_value_t = 131_072)]
+    pub max_queue_tokens: usize,
+
+    /// After shutdown starts, seconds to wait for requests in progress
+    /// before exiting anyway; keep it below the pod's grace period.
+    #[arg(long, env = "GATEWAY_DRAIN_TIMEOUT", default_value_t = 30.0)]
+    pub drain_timeout: f64,
+
     /// Batches in flight to the model server at once (its replica count).
     #[arg(long, env = "GATEWAY_BACKEND_CONCURRENCY", default_value_t = 1)]
     pub backend_concurrency: usize,
@@ -110,6 +120,7 @@ impl Config {
             },
             max_wait: Duration::from_millis(self.max_wait_ms),
             concurrency: self.backend_concurrency,
+            max_queue_tokens: self.max_queue_tokens,
         }
     }
 
@@ -120,6 +131,14 @@ impl Config {
             return Err(format!(
                 "--max-batch-tokens ({}) must fit one sequence of --max-residues ({longest} tokens)",
                 self.max_batch_tokens
+            ));
+        }
+        // Otherwise the largest valid request could never be admitted.
+        let largest = self.max_request_residues + self.max_sequences * SPECIAL_TOKENS;
+        if self.max_queue_tokens < largest {
+            return Err(format!(
+                "--max-queue-tokens ({}) must hold the largest request allowed ({largest} tokens)",
+                self.max_queue_tokens
             ));
         }
         if !(0.0..1.0).contains(&self.max_padding) {
@@ -135,5 +154,9 @@ impl Config {
 
     pub fn shutdown_delay(&self) -> Duration {
         Duration::from_secs_f64(self.shutdown_delay)
+    }
+
+    pub fn drain_timeout(&self) -> Duration {
+        Duration::from_secs_f64(self.drain_timeout)
     }
 }

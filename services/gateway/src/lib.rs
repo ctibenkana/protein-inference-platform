@@ -10,4 +10,5 @@ pub mod batcher;
 pub mod config;
 pub mod metrics;
 pub mod scheduler;
+pub mod server;
 pub mod validate;

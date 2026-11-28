@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 
 use clap::Parser;
 use tokio::net::TcpListener;
@@ -8,6 +7,7 @@ use tracing_subscriber::EnvFilter;
 use gateway::api::{self, AppState};
 use gateway::backend::Backend;
 use gateway::config::{Config, LogFormat};
+use gateway::server::{self, Shutdown};
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
@@ -43,28 +43,20 @@ async fn main() -> std::io::Result<()> {
         max_batch_tokens = cfg.max_batch_tokens,
         max_padding = cfg.max_padding,
         max_wait_ms = cfg.max_wait_ms,
+        max_queue_tokens = cfg.max_queue_tokens,
+        drain_timeout_seconds = cfg.drain_timeout,
         "gateway started"
     );
 
     // Metrics stay up until the process exits, so the final values can be scraped.
     tokio::spawn(axum::serve(metrics_listener, api::metrics_router(state.clone())).into_future());
 
-    let delay = cfg.shutdown_delay();
-    let draining = state.clone();
-    axum::serve(api_listener, api::router(state))
-        .with_graceful_shutdown(async move {
-            shutdown_signal().await;
-            // Fail readiness first and keep serving briefly: Kubernetes takes
-            // a moment to stop sending new requests to a terminating pod.
-            draining.shutting_down.store(true, Ordering::Relaxed);
-            tracing::info!(
-                delay_seconds = delay.as_secs_f64(),
-                "shutdown requested; draining"
-            );
-            tokio::time::sleep(delay).await;
-        })
-        .await?;
-    tracing::info!("stopped");
+    let shutdown = Shutdown {
+        delay: cfg.shutdown_delay(),
+        drain_timeout: cfg.drain_timeout(),
+    };
+    let outcome = server::serve(api_listener, state, shutdown_signal(), shutdown).await?;
+    tracing::info!(?outcome, "stopped");
     Ok(())
 }
 

@@ -9,6 +9,7 @@
 
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use tokio::sync::{Semaphore, mpsc, oneshot};
@@ -17,6 +18,7 @@ use tokio::time::{Instant, sleep_until};
 use crate::backend::{Backend, BackendError, BatchOutput};
 use crate::batcher::{self, Budget, Policy, Queued};
 use crate::metrics::{DropLabel, Metrics, OutcomeLabel, TriggerLabel};
+use crate::validate::SPECIAL_TOKENS;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Config {
@@ -26,6 +28,18 @@ pub struct Config {
     pub max_wait: Duration,
     /// Batches in flight to the model server at once.
     pub concurrency: usize,
+    /// Tokens (residues plus special tokens) admitted but not yet batched;
+    /// requests that would exceed it are refused.
+    pub max_queue_tokens: usize,
+}
+
+/// The queue is full; the request was not queued.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Overloaded;
+
+/// Tokens a sequence occupies in the queue and in a batch.
+fn tokens(len: usize) -> usize {
+    len + SPECIAL_TOKENS
 }
 
 /// One embedding inside a finished batch.
@@ -53,18 +67,51 @@ struct Item {
 #[derive(Clone)]
 pub struct Scheduler {
     tx: mpsc::UnboundedSender<Queued<Item>>,
+    /// Tokens admitted and not yet batched or dropped. Shared with the
+    /// dispatcher, which releases tokens as items leave the queue.
+    admitted: Arc<AtomicUsize>,
+    capacity: usize,
 }
 
 impl Scheduler {
     /// Starts the dispatcher on the current Tokio runtime.
     pub fn start(backend: Backend, config: Config, metrics: Arc<Metrics>) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
-        tokio::spawn(dispatch(rx, backend, config, metrics));
-        Self { tx }
+        let admitted = Arc::new(AtomicUsize::new(0));
+        metrics.queue_capacity.set(config.max_queue_tokens as i64);
+        tokio::spawn(dispatch(rx, backend, config, metrics, admitted.clone()));
+        Self {
+            tx,
+            admitted,
+            capacity: config.max_queue_tokens,
+        }
     }
 
-    /// Queues one sequence. The receiver yields its embedding, or an error.
-    /// Dropping the receiver cancels the item if it hasn't been batched yet.
+    /// Reserves queue space for a whole request before any of it is queued,
+    /// so a request is either queued completely or refused. Counting at
+    /// admission, rather than when the dispatcher picks items up, means a
+    /// burst of simultaneous requests can't overshoot the limit.
+    pub fn admit<'a>(
+        &self,
+        sequences: impl IntoIterator<Item = &'a String>,
+    ) -> Result<(), Overloaded> {
+        let need: usize = sequences.into_iter().map(|s| tokens(s.len())).sum();
+        self.admitted
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |queued| {
+                (queued + need <= self.capacity).then_some(queued + need)
+            })
+            .map(|_| ())
+            .map_err(|_| Overloaded)
+    }
+
+    /// Tokens admitted and not yet batched or dropped.
+    pub fn queued_tokens(&self) -> usize {
+        self.admitted.load(Ordering::Acquire)
+    }
+
+    /// Queues one sequence, which must have been admitted. The receiver
+    /// yields its embedding, or an error. Dropping the receiver cancels the
+    /// item if it hasn't been batched yet.
     pub fn submit(&self, sequence: String, deadline: Instant) -> oneshot::Receiver<Reply> {
         let (reply, rx) = oneshot::channel();
         let item = Item {
@@ -73,39 +120,48 @@ impl Scheduler {
             reply,
             sequence,
         };
+        let len = item.sequence.len();
         // If the dispatcher is gone, `reply` is dropped with the message and
-        // the caller sees a closed channel.
-        let _ = self.tx.send(Queued {
-            len: item.sequence.len(),
-            payload: item,
-        });
+        // the caller sees a closed channel; give the reservation back.
+        if self.tx.send(Queued { len, payload: item }).is_err() {
+            self.admitted.fetch_sub(tokens(len), Ordering::AcqRel);
+        }
         rx
     }
 }
 
 struct Queue {
     items: VecDeque<Queued<Item>>,
-    /// Residues plus special tokens, summed over queued items.
+    /// Tokens of the items in `items` (what a batch could be made from).
     tokens: usize,
+    /// The admission counter, released as items leave.
+    admitted: Arc<AtomicUsize>,
 }
 
 impl Queue {
     fn push(&mut self, item: Queued<Item>, m: &Metrics) {
-        self.tokens += item.len + crate::validate::SPECIAL_TOKENS;
+        self.tokens += tokens(item.len);
         self.items.push_back(item);
         self.observe(m);
     }
 
+    /// Items left the queue (batched or dropped): free their space.
+    fn release(&mut self, len: usize) {
+        self.tokens -= tokens(len);
+        self.admitted.fetch_sub(tokens(len), Ordering::AcqRel);
+    }
+
     fn observe(&self, m: &Metrics) {
         m.queue_items.set(self.items.len() as i64);
-        m.queue_tokens.set(self.tokens as i64);
+        m.queue_tokens
+            .set(self.admitted.load(Ordering::Acquire) as i64);
     }
 
     /// Drops items nobody is waiting for, and fails items past their deadline.
     fn sweep(&mut self, now: Instant, m: &Metrics) {
         let before = self.items.len();
         let mut kept = VecDeque::with_capacity(before);
-        for q in self.items.drain(..) {
+        for q in std::mem::take(&mut self.items) {
             let reason = if q.payload.reply.is_closed() {
                 Some("cancelled")
             } else if q.payload.deadline <= now {
@@ -116,7 +172,7 @@ impl Queue {
             match reason {
                 None => kept.push_back(q),
                 Some(reason) => {
-                    self.tokens -= q.len + crate::validate::SPECIAL_TOKENS;
+                    self.release(q.len);
                     m.dropped.get_or_create(&DropLabel { reason }).inc();
                     let _ = q.payload.reply.send(Err(BackendError::Timeout));
                 }
@@ -148,11 +204,13 @@ async fn dispatch(
     backend: Backend,
     config: Config,
     metrics: Arc<Metrics>,
+    admitted: Arc<AtomicUsize>,
 ) {
     let slots = Arc::new(Semaphore::new(config.concurrency.max(1)));
     let mut queue = Queue {
         items: VecDeque::new(),
         tokens: 0,
+        admitted,
     };
     let mut open = true;
 
@@ -212,10 +270,9 @@ async fn dispatch(
         };
 
         let batch = batcher::take_batch(&mut queue.items, config.policy, &config.budget);
-        queue.tokens -= batch
-            .iter()
-            .map(|q| q.len + crate::validate::SPECIAL_TOKENS)
-            .sum::<usize>();
+        for q in &batch {
+            queue.release(q.len);
+        }
         queue.observe(&metrics);
         metrics
             .batch_trigger

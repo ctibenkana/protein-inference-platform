@@ -54,6 +54,10 @@ pub struct Metrics {
     /// Items waiting to be batched, and their tokens.
     pub queue_items: Gauge,
     pub queue_tokens: Gauge,
+    /// The admission limit, so dashboards can show how full the queue is.
+    pub queue_capacity: Gauge,
+    /// Requests refused before queueing, by reason.
+    pub rejected: Family<DropLabel, Counter>,
     /// Time from arrival to being put in a batch.
     pub queue_wait: Histogram,
     /// Items removed from the queue without being run.
@@ -79,6 +83,8 @@ impl Metrics {
             residues: Counter::default(),
             queue_items: Gauge::default(),
             queue_tokens: Gauge::default(),
+            queue_capacity: Gauge::default(),
+            rejected: Family::default(),
             queue_wait: Histogram::new([
                 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0,
             ]),
@@ -124,8 +130,18 @@ impl Metrics {
         );
         r.register(
             "queue_tokens",
-            "Tokens (residues plus special tokens) waiting to be batched.",
+            "Tokens (residues plus special tokens) admitted and not yet batched.",
             m.queue_tokens.clone(),
+        );
+        r.register(
+            "queue_capacity_tokens",
+            "Admission limit for queued tokens.",
+            m.queue_capacity.clone(),
+        );
+        r.register(
+            "rejected",
+            "Requests refused before queueing, by reason.",
+            m.rejected.clone(),
         );
         r.register(
             "queue_wait_seconds",
