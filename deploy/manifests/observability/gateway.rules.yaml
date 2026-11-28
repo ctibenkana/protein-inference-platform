@@ -2,10 +2,14 @@
 # See docs/slos.md and docs/benchmarks/gateway-load-tests.md.
 #
 # SLIs, from the gateway's request histogram:
-#   availability: requests answered without a 5xx. 4xx are the caller's
-#                 mistakes and count as good; 503 for a full queue counts as
+#   availability: requests answered without a 5xx. 4xx (including 401 for
+#                 a missing key and 429 for a caller over its quota) are
+#                 the caller's side and count as good; 503 for a full queue counts as
 #                 bad, since it means the service is short of capacity.
 #   latency:      successful requests answered within 1 s.
+# Only live traffic counts: requests from synthetic callers (load tests)
+# are labelled traffic="synthetic" by the gateway and left out, so testing
+# the service doesn't spend its error budget.
 # Objectives over 7 days: availability 99%, latency 95%. Alerts use
 # multi-window burn rates, and need a minimum of traffic, because lab use
 # is sporadic and one failure among three requests is not an outage.
@@ -22,66 +26,66 @@ spec:
       rules:
         # Requests per window, for the minimum-traffic guard.
         - record: gateway:requests:increase1h
-          expr: sum(increase(gateway_request_duration_seconds_count[1h]))
+          expr: sum(increase(gateway_request_duration_seconds_count{traffic="live"}[1h]))
         - record: gateway:requests:increase6h
-          expr: sum(increase(gateway_request_duration_seconds_count[6h]))
+          expr: sum(increase(gateway_request_duration_seconds_count{traffic="live"}[6h]))
 
         # Share of requests answered with a 5xx. No series without traffic;
         # 0 (not no data) when there is traffic but no 5xx.
         - record: gateway:errors:ratio_rate5m
           expr: |
-            (sum(rate(gateway_request_duration_seconds_count{code=~"5.."}[5m])) or vector(0))
-            / (sum(rate(gateway_request_duration_seconds_count[5m])) > 0)
+            (sum(rate(gateway_request_duration_seconds_count{traffic="live", code=~"5.."}[5m])) or vector(0))
+            / (sum(rate(gateway_request_duration_seconds_count{traffic="live"}[5m])) > 0)
         - record: gateway:errors:ratio_rate30m
           expr: |
-            (sum(rate(gateway_request_duration_seconds_count{code=~"5.."}[30m])) or vector(0))
-            / (sum(rate(gateway_request_duration_seconds_count[30m])) > 0)
+            (sum(rate(gateway_request_duration_seconds_count{traffic="live", code=~"5.."}[30m])) or vector(0))
+            / (sum(rate(gateway_request_duration_seconds_count{traffic="live"}[30m])) > 0)
         - record: gateway:errors:ratio_rate1h
           expr: |
-            (sum(rate(gateway_request_duration_seconds_count{code=~"5.."}[1h])) or vector(0))
-            / (sum(rate(gateway_request_duration_seconds_count[1h])) > 0)
+            (sum(rate(gateway_request_duration_seconds_count{traffic="live", code=~"5.."}[1h])) or vector(0))
+            / (sum(rate(gateway_request_duration_seconds_count{traffic="live"}[1h])) > 0)
         - record: gateway:errors:ratio_rate6h
           expr: |
-            (sum(rate(gateway_request_duration_seconds_count{code=~"5.."}[6h])) or vector(0))
-            / (sum(rate(gateway_request_duration_seconds_count[6h])) > 0)
+            (sum(rate(gateway_request_duration_seconds_count{traffic="live", code=~"5.."}[6h])) or vector(0))
+            / (sum(rate(gateway_request_duration_seconds_count{traffic="live"}[6h])) > 0)
 
         # Share of successful requests slower than 1 s (the le="1.0" bucket).
         - record: gateway:slow:ratio_rate5m
           expr: |
             1 - (
-              sum(rate(gateway_request_duration_seconds_bucket{code="200", le="1.0"}[5m]))
-              / (sum(rate(gateway_request_duration_seconds_count{code="200"}[5m])) > 0)
+              sum(rate(gateway_request_duration_seconds_bucket{traffic="live", code="200", le="1.0"}[5m]))
+              / (sum(rate(gateway_request_duration_seconds_count{traffic="live", code="200"}[5m])) > 0)
             )
         - record: gateway:slow:ratio_rate30m
           expr: |
             1 - (
-              sum(rate(gateway_request_duration_seconds_bucket{code="200", le="1.0"}[30m]))
-              / (sum(rate(gateway_request_duration_seconds_count{code="200"}[30m])) > 0)
+              sum(rate(gateway_request_duration_seconds_bucket{traffic="live", code="200", le="1.0"}[30m]))
+              / (sum(rate(gateway_request_duration_seconds_count{traffic="live", code="200"}[30m])) > 0)
             )
         - record: gateway:slow:ratio_rate1h
           expr: |
             1 - (
-              sum(rate(gateway_request_duration_seconds_bucket{code="200", le="1.0"}[1h]))
-              / (sum(rate(gateway_request_duration_seconds_count{code="200"}[1h])) > 0)
+              sum(rate(gateway_request_duration_seconds_bucket{traffic="live", code="200", le="1.0"}[1h]))
+              / (sum(rate(gateway_request_duration_seconds_count{traffic="live", code="200"}[1h])) > 0)
             )
         - record: gateway:slow:ratio_rate6h
           expr: |
             1 - (
-              sum(rate(gateway_request_duration_seconds_bucket{code="200", le="1.0"}[6h]))
-              / (sum(rate(gateway_request_duration_seconds_count{code="200"}[6h])) > 0)
+              sum(rate(gateway_request_duration_seconds_bucket{traffic="live", code="200", le="1.0"}[6h]))
+              / (sum(rate(gateway_request_duration_seconds_count{traffic="live", code="200"}[6h])) > 0)
             )
 
         # 7-day SLO attainment, for the dashboard and reviews.
         - record: gateway:availability:7d
           expr: |
             1 - (
-              (sum(increase(gateway_request_duration_seconds_count{code=~"5.."}[7d])) or vector(0))
-              / (sum(increase(gateway_request_duration_seconds_count[7d])) > 0)
+              (sum(increase(gateway_request_duration_seconds_count{traffic="live", code=~"5.."}[7d])) or vector(0))
+              / (sum(increase(gateway_request_duration_seconds_count{traffic="live"}[7d])) > 0)
             )
         - record: gateway:latency_good:7d
           expr: |
-            sum(increase(gateway_request_duration_seconds_bucket{code="200", le="1.0"}[7d]))
-            / (sum(increase(gateway_request_duration_seconds_count{code="200"}[7d])) > 0)
+            sum(increase(gateway_request_duration_seconds_bucket{traffic="live", code="200", le="1.0"}[7d]))
+            / (sum(increase(gateway_request_duration_seconds_count{traffic="live", code="200"}[7d])) > 0)
 
     # ---------------------------------------------------------------- SLOs
     - name: gateway.slo

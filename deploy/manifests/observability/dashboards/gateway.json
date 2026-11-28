@@ -259,7 +259,7 @@
     {
       "type": "timeseries",
       "title": "Requests by status",
-      "description": "Embedding requests per second, by HTTP status.",
+      "description": "Embedding requests per second, by HTTP status and traffic type. Synthetic traffic (load tests) is left out of the SLOs.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -267,12 +267,12 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (code) (rate(gateway_request_duration_seconds_count[1m]))",
+          "expr": "sum by (code, traffic) (rate(gateway_request_duration_seconds_count[1m]))",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "legendFormat": "{{code}}"
+          "legendFormat": "{{code}} {{traffic}}"
         }
       ],
       "fieldConfig": {
@@ -870,6 +870,104 @@
       "id": 14
     },
     {
+      "type": "timeseries",
+      "title": "Requests by caller",
+      "description": "Requests per second per API key (pseudonymous caller ids), by status. 429 means the caller hit its own rate or queue share.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (caller, code) (rate(gateway_caller_requests_total[1m]))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "legendFormat": "{{caller}} {{code}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 45,
+        "w": 12,
+        "h": 8
+      },
+      "id": 15
+    },
+    {
+      "type": "timeseries",
+      "title": "Residues by caller",
+      "description": "Residues embedded per second per caller: the unit the per-caller rate limit is set in.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (caller) (rate(gateway_caller_residues_total[1m]))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "legendFormat": "{{caller}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 45,
+        "w": 12,
+        "h": 8
+      },
+      "id": 16
+    },
+    {
       "type": "logs",
       "title": "Gateway warnings and errors",
       "description": "Gateway log lines above INFO. Request logs carry sizes and timings only; sequences are never logged.",
@@ -894,11 +992,11 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 45,
+        "y": 53,
         "w": 24,
         "h": 8
       },
-      "id": 15
+      "id": 17
     }
   ]
 }
