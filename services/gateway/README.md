@@ -41,7 +41,10 @@ curl -s gateway/v1/embeddings -H 'content-type: application/json' \
 | 503 `backend_unavailable` + `Retry-After` | model server unavailable (after one retry) |
 | 504 | deadline passed |
 
-On the cluster, try it with `make gateway-demo`.
+On the cluster, try it with `make gateway-demo`. There the gateway runs in
+the same pod as the model server, one to one, with the model server as a
+native sidecar on localhost (see [the manifest](../../deploy/manifests/inference/embedding-service.yaml)
+and why: [E5](../../docs/benchmarks/gateway-load-tests.md#e5-in-the-cluster)).
 
 ## Batching
 

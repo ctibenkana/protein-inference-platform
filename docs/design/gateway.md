@@ -139,10 +139,15 @@ work, work lengthens the queue, a longer queue makes bigger, more mixed
 batches. With `max_wait` at 0, batches form only while the model server is
 busy, so batching costs nothing at low load.
 
-**Known limit:** each gateway replica batches on its own. With two replicas
-and one model server, two batches can arrive at once and the second waits
-inside the model server. A shared queue, or routing to model-server replicas
-directly, would fix that when there are enough users to matter.
+**Deployment: one gateway per model server.** Running two gateway
+replicas in front of one model server made p99 3–4× worse in the cluster
+([E5](../benchmarks/gateway-load-tests.md#e5-in-the-cluster)): each batched
+half the traffic, and their batches then queued first-come, first-served in
+the model server. So the gateway and the model server share a pod, one to
+one; the model server is a native sidecar that starts first and stops after
+the gateway has drained, and listens on localhost only. Scaling out adds
+both together. Spreading traffic across several such pods by queue length,
+rather than by connection, is the next step once there are several.
 
 ## Overload and failure
 

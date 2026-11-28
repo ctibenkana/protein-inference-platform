@@ -1,6 +1,6 @@
 # Gateway load tests
 
-**Date:** 2026-11-28 · **Gateway:** `f66c56a` · **Raw results:**
+**Date:** 2026-11-28 · **Gateway:** `f66c56a` (E1–E4), `c947895` (E5) · **Raw results:**
 [`services/gateway/bench/results/`](../../services/gateway/bench/results/)
 
 Questions:
@@ -9,6 +9,7 @@ Questions:
    only for bursts?
 2. What should the queue limit and the batching wait be?
 3. What latency can the service promise, and at what load?
+4. Does the deployed service behave like the local measurements?
 
 ## Method
 
@@ -106,6 +107,46 @@ to an idle model. Here, nothing is sent while the model server is busy, so
 batches fill by themselves under load; a wait only adds delay when it is
 idle. **Default changed from 10 ms to 0.**
 
+## E5: in the cluster
+
+`make loadtest` runs the same generator as a Job inside the local kind
+cluster, against the deployed service, through its Service and network
+policies. Same model server settings (2 threads).
+
+| Layout | Offered req/s | Served req/s | Refused | Timed out | p50 | p90 | p99 |
+|---|---|---|---|---|---|---|---|
+| two gateways | 5 | 4.5 | 0% | 0% | 0.20 s | 0.66 s | 1.87 s |
+| two gateways | 10 | 9.2 | 0% | 0% | 1.18 s | 8.88 s | 10.49 s |
+| two gateways | 15 | 14.6 | 0% | 0% | 2.56 s | 5.35 s | 7.07 s |
+| two gateways | 20 | 14.5 | 29% | 0% | 5.72 s | 9.34 s | 11.73 s |
+| two gateways | 25 | 13.0 | 48% | 0% | 6.69 s | 11.02 s | 14.74 s |
+| one gateway (diagnostic) | 5 | 4.5 | 0% | 0% | 0.15 s | 0.28 s | 0.58 s |
+| one gateway (diagnostic) | 10 | 9.2 | 0% | 0% | 0.65 s | 1.99 s | 2.72 s |
+| one gateway (diagnostic) | 15 | 12.6 | 14% | 0% | 3.19 s | 5.80 s | 7.81 s |
+| sidecar (deployed) | 5 | 4.5 | 0% | 0% | 0.21 s | 0.57 s | 0.92 s |
+| sidecar (deployed) | 10 | 9.2 | 0% | 0% | 0.62 s | 1.72 s | 2.43 s |
+| sidecar (deployed) | 15 | 12.4 | 15% | 0% | 3.25 s | 6.22 s | 7.89 s |
+
+Two findings:
+
+1. **The model server is about 2× slower in the cluster** (kind runs inside
+   Docker Desktop's Linux VM): about 5–6k residues/s against about 13k
+   natively, so capacity is about 12–14 requests/s instead of about 25.
+   Allowing for that, the gateway behaves as it did locally.
+2. **Two gateway replicas in front of one model server made p99 3–4× worse**
+   than one gateway (10.5 s vs 2.7 s at 10 requests/s). Each batched half the
+   traffic on its own, and their batches then queued first-come,
+   first-served inside the model server, where length-aware ordering no
+   longer applies. To test this without changing the deployment, the
+   diagnostic run sent all traffic to one gateway pod's IP.
+
+**Fix, deployed:** the gateway now runs in the same pod as the model
+server, one to one, with the model server as a native sidecar (it starts
+first and stops after the gateway has drained) listening on localhost only.
+The sidecar layout matches the single-gateway numbers. A rollout under
+steady traffic (5 requests/s for 100 s, pod replaced midway) answered 395
+of 395 requests.
+
 ## Decisions
 
 | Setting | Before | After | Evidence |
@@ -113,8 +154,9 @@ idle. **Default changed from 10 ms to 0.**
 | `--max-wait-ms` | 10 | **0** | E3, E4 |
 | `--max-queue-tokens` | 131,072 | **16,384** | E2: p99 under overload 7.1 s → 3.0 s |
 | `--max-request-residues` | 65,536 | **8,192** | must fit the smaller queue; ~8 full-length proteins; bulk work goes to the batch job |
-| Latency SLO | not set | **95% of requests answered within 1 s** | E1: p99 0.68 s at 20 requests/s |
-| Planned capacity | not set | **20 requests/s** of single proteins per model-server replica (2 CPU threads) | E1: degrades from 25 |
+| Latency SLO | not set | **95% of requests answered within 1 s** | E1: p99 0.68 s at 20 requests/s; E5: p90 0.57 s at 5 requests/s |
+| Planned capacity per model-server replica (2 CPU threads) | not set | **20 requests/s** natively; **5 requests/s** on the local kind cluster | E1, E5 |
+| Layout | two gateways, one model server | **gateway and model server in one pod** | E5 |
 
 ## Limits of these results
 
@@ -126,3 +168,5 @@ idle. **Default changed from 10 ms to 0.**
   would justify a far larger one. Expressing it as *seconds of work*, from
   the measured drain rate, would carry across hardware.
 - CPU only, ESM-2 8M. Larger models and GPUs come with the GKE stage.
+- E5 runs on the same laptop, inside Docker's VM, alongside the monitoring
+  stack; the cloud deployment needs its own measurement.
