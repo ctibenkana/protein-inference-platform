@@ -10,6 +10,7 @@
 #   make argocd    (install Argo CD once; it then syncs deploy/ from git)
 #   make status    (list Argo CD applications and their health)
 #   make ui-argocd / make ui-grafana   (open the UIs via port-forward)
+#   make gateway-demo  (call the embeddings API on the cluster)
 #   make kind-down (local only: delete the kind cluster)
 
 ENV_DIR := infra/envs/dev
@@ -27,7 +28,7 @@ GRAFANA_PORT ?= 3300
 ARGOCD_PORT  ?= 8380
 
 .PHONY: help check init plan up down creds fmt validate \
-        test-rules discord-secret deadman-secret test-notification local-silences kind-up kind-down context-guard embed-image embed-job argocd grafana-secret status ui-argocd ui-grafana
+        test-rules discord-secret deadman-secret test-notification local-silences gateway-demo kind-up kind-down context-guard embed-image embed-job argocd grafana-secret status ui-argocd ui-grafana
 
 help:
 	@grep -E '^#' Makefile | sed 's/^# \{0,1\}//'
@@ -187,6 +188,19 @@ embed-job: context-guard
 	echo "submitted $$job, waiting for it to finish..." && \
 	kubectl -n inference wait --for=condition=complete $$job --timeout=20m && \
 	kubectl -n inference logs $$job | grep ' summary ' | sed 's/.* summary //'
+
+# --- Inference gateway -------------------------------------------------------
+#   make gateway-demo  (send two proteins through the gateway on the cluster)
+
+GATEWAY_PORT ?= 8088
+
+gateway-demo: context-guard
+	@kubectl -n inference port-forward svc/gateway $(GATEWAY_PORT):80 >/dev/null 2>&1 & pf=$$!; \
+	sleep 3; \
+	curl -sS localhost:$(GATEWAY_PORT)/v1/embeddings -H 'content-type: application/json' \
+		-d '{"sequences": ["MKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQ", "MSEQNNTEMTFQIQRIYTKDISFEAPNAPHVFQKDW"]}' | \
+	python3 scripts/show_embeddings.py; \
+	kill $$pf
 
 ui-argocd:
 	@echo "Argo CD: http://localhost:$(ARGOCD_PORT)  user: admin  password:"

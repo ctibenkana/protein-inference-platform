@@ -340,13 +340,15 @@ async fn run_batch(
     }
 }
 
+/// Readiness reflects only the gateway itself. If it followed the model
+/// server, a model-server restart would take every gateway replica out of
+/// the Service, and callers would get connection errors instead of a clear
+/// 503 with Retry-After.
 async fn readyz(State(s): State<Arc<AppState>>) -> (StatusCode, &'static str) {
     if s.shutting_down.load(Ordering::Relaxed) {
         (StatusCode::SERVICE_UNAVAILABLE, "shutting down")
-    } else if s.backend.ready().await {
-        (StatusCode::OK, "ready")
     } else {
-        (StatusCode::SERVICE_UNAVAILABLE, "model server not ready")
+        (StatusCode::OK, "ready")
     }
 }
 

@@ -7,7 +7,7 @@ use std::time::Duration;
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::{Request, StatusCode};
-use axum::routing::{get, post};
+use axum::routing::post;
 use axum::{Json, Router};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
@@ -31,7 +31,6 @@ struct Fake {
     delay_ms: AtomicUsize,
     /// Return one embedding too few.
     short_reply: AtomicBool,
-    not_ready: AtomicBool,
 }
 
 /// Embedding of a sequence: (length, number of A, 1.0).
@@ -72,14 +71,6 @@ async fn fake_batch(
     )
 }
 
-async fn fake_ready(State(f): State<Arc<Fake>>) -> StatusCode {
-    if f.not_ready.load(Ordering::SeqCst) {
-        StatusCode::SERVICE_UNAVAILABLE
-    } else {
-        StatusCode::OK
-    }
-}
-
 /// Starts a fake model server and a gateway pointed at it.
 async fn setup() -> (Router, Arc<Fake>, Arc<AppState>) {
     setup_with(Limits::default()).await
@@ -89,7 +80,6 @@ async fn setup_with(limits: Limits) -> (Router, Arc<Fake>, Arc<AppState>) {
     let fake = Arc::new(Fake::default());
     let app = Router::new()
         .route("/v1/batch", post(fake_batch))
-        .route("/readyz", get(fake_ready))
         .with_state(fake.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -373,29 +363,24 @@ async fn malformed_model_reply_is_500() {
 // --- health and metrics --------------------------------------------------------
 
 #[tokio::test]
-async fn readiness_follows_model_server_and_shutdown() {
+async fn readiness_ignores_model_server_but_follows_shutdown() {
     let (app, fake, state) = setup().await;
     let get = |path: &'static str| Request::get(path).body(Body::empty()).unwrap();
     assert_eq!(send(&app, get("/healthz")).await.status, StatusCode::OK);
     assert_eq!(send(&app, get("/readyz")).await.status, StatusCode::OK);
 
-    fake.not_ready.store(true, Ordering::SeqCst);
-    assert_eq!(
-        send(&app, get("/readyz")).await.status,
-        StatusCode::SERVICE_UNAVAILABLE
-    );
-    assert_eq!(
-        send(&app, get("/healthz")).await.status,
-        StatusCode::OK,
-        "liveness doesn't depend on the backend"
-    );
+    // Model server failing: the gateway stays in the Service and answers 503s.
+    fake.fail_first.store(10, Ordering::SeqCst);
+    assert_eq!(send(&app, get("/readyz")).await.status, StatusCode::OK);
+    let r = embed(&app, json!({"sequences": ["MK"]})).await;
+    assert_eq!(r.status, StatusCode::SERVICE_UNAVAILABLE);
 
-    fake.not_ready.store(false, Ordering::SeqCst);
     state.shutting_down.store(true, Ordering::SeqCst);
     assert_eq!(
         send(&app, get("/readyz")).await.status,
         StatusCode::SERVICE_UNAVAILABLE
     );
+    assert_eq!(send(&app, get("/healthz")).await.status, StatusCode::OK);
 }
 
 #[tokio::test]

@@ -72,7 +72,6 @@ struct WireBatch {
 pub struct Backend {
     client: reqwest::Client,
     batch_url: String,
-    ready_url: String,
 }
 
 impl Backend {
@@ -86,7 +85,6 @@ impl Backend {
         Self {
             client,
             batch_url: format!("{base}/v1/batch"),
-            ready_url: format!("{base}/readyz"),
         }
     }
 
@@ -135,14 +133,6 @@ impl Backend {
             dim: wire.dim,
             vectors,
         })
-    }
-
-    /// True when the model server reports its model loaded.
-    pub async fn ready(&self) -> bool {
-        matches!(
-            self.client.get(&self.ready_url).timeout(Duration::from_secs(2)).send().await,
-            Ok(r) if r.status().is_success()
-        )
     }
 }
 

@@ -114,7 +114,7 @@ can span several batches.
 | Item's deadline passes while queued | Dropped before it is batched; request gets 504. |
 | Caller disconnects | Its items are skipped when batches are formed. |
 | Backend connection error or 5xx | Retry the batch once (embedding is idempotent), then fail its requests with 503. |
-| Backend not ready | `/readyz` fails, so Kubernetes stops sending traffic. |
+| Model server down or loading | Requests get 503 + `Retry-After`. The gateway's own readiness does **not** follow the model server: if it did, one model-server restart would remove every gateway replica from the Service and callers would see connection errors instead of a clear answer. |
 | Shutdown (SIGTERM) | Stop accepting, finish queued work within the grace period. |
 
 Backend concurrency equals the number of model-server replicas, one batch
