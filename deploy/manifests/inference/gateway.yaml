@@ -41,13 +41,14 @@ spec:
               app.kubernetes.io/name: gateway
       containers:
         - name: gateway
-          image: ghcr.io/ctibenkana/gateway@sha256:afec210e42079e83627ec129f5dab059371c47fd0f6c3301b71bcb0defc260d1 # sha-2a32cfc
+          image: ghcr.io/ctibenkana/gateway@sha256:9bf2691e54e6b2c0288e2fa28368004b27381ec184b6c8234b47acfb8c25d03c # sha-c947895
           env:
             - { name: GATEWAY_BACKEND_URL, value: "http://esm-embed-server:8000" }
             - { name: GATEWAY_SHUTDOWN_DELAY, value: "5" }
             - { name: GATEWAY_DRAIN_TIMEOUT, value: "30" }
-            # About 8 full batches; set from the load test in step 5.
-            - { name: GATEWAY_MAX_QUEUE_TOKENS, value: "131072" }
+            # About 1.2 s of work for this model server; see
+            # docs/benchmarks/gateway-load-tests.md (E2).
+            - { name: GATEWAY_MAX_QUEUE_TOKENS, value: "16384" }
           ports:
             - { name: http, containerPort: 8080 }
             - { name: metrics, containerPort: 9100 }
