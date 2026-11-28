@@ -1,0 +1,1 @@
+{"label":"e2-queue-32768","offered_rps":35.0,"sequences_per_request":1,"measured_seconds":30.0,"sent":1018,"ok":984,"overloaded":34,"timed_out":0,"other_errors":0,"ok_rps":32.8,"residues_per_second":14153.7,"p50_s":1.737546663,"p90_s":3.82541955,"p99_s":5.063335588,"max_s":5.380368428,"padding":0.07860785308159304,"mean_batch_sequences":8.875}

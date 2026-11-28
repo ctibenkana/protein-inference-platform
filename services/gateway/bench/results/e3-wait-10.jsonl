@@ -1,0 +1,1 @@
+{"label":"e3-wait-10","offered_rps":15.0,"sequences_per_request":1,"measured_seconds":30.0,"sent":419,"ok":419,"overloaded":0,"timed_out":0,"other_errors":0,"ok_rps":13.966666666666667,"residues_per_second":6269.633333333333,"p50_s":0.057735295,"p90_s":0.158431318,"p99_s":0.315671337,"max_s":0.378518741,"padding":0.009515471159996226,"mean_batch_sequences":1.0968586387434556}

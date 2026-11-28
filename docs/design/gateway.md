@@ -1,6 +1,6 @@
 # Design: inference gateway
 
-**Status:** steps 1–4 built · **Owner:** platform · **Last updated:** 2026-11-28
+**Status:** steps 1–5 built · **Owner:** platform · **Last updated:** 2026-11-28
 
 ## Problem
 
@@ -91,7 +91,8 @@ either:
 
 - the queued tokens could fill the **token budget** (batch size × (longest
   + 2) ≤ `max_batch_tokens`, default 8,192, the same rule as the batch job), or
-- the **oldest item has waited `max_wait`** (default 10 ms).
+- the **oldest item has waited `max_wait`** (default 0: load tests found no
+  benefit in waiting; see below).
 
 While every slot is busy, nothing is sent, so batches fill up by themselves
 under load; at low load a lone request waits at most `max_wait`.
@@ -131,7 +132,12 @@ each in opposite orders):
 | fifo | 43–44% | 31–40 s | 15–21 s | 31–39 s |
 | length-aware | 4.4–4.7% | 15.4 s | 6.3–6.4 s | 15 s |
 
-Systematic load tests (arrival rates, `max_wait`, larger models) are step 5.
+**Under continuous load** ([load tests](../benchmarks/gateway-load-tests.md)),
+length-aware batching carries 3–4× the load of fifo at the same latency.
+fifo falls into a feedback loop: mixed batches add padding, padding adds
+work, work lengthens the queue, a longer queue makes bigger, more mixed
+batches. With `max_wait` at 0, batches form only while the model server is
+busy, so batching costs nothing at low load.
 
 **Known limit:** each gateway replica batches on its own. With two replicas
 and one model server, two batches can arrive at once and the second waits
@@ -182,13 +188,12 @@ Metrics (gateway): request latency by status, queue wait, batch size and
 tokens, **padding fraction (live)**, queue depth in tokens, rejections by
 reason, backend latency and errors.
 
-Proposed SLOs over 7 days; latency targets are set from the first load test,
-not guessed:
+SLOs over 7 days; the latency target comes from the load tests, not a guess:
 
 | SLO | Target |
 |---|---|
 | Availability: requests answered without 5xx | ≥ 99% |
-| Latency: requests of ≤ 8 sequences answered in under *T* | ≥ 95% |
+| Latency: requests answered within 1 s (planned load: 20 single-protein requests/s per model-server replica; [measured](../benchmarks/gateway-load-tests.md)) | ≥ 95% |
 | Padding: share of computed tokens that are padding | ≤ 10% (existing cost SLO) |
 
 ## Implementation plan

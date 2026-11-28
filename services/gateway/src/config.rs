@@ -29,8 +29,9 @@ pub struct Config {
     #[arg(long, env = "GATEWAY_MAX_SEQUENCES", default_value_t = 64)]
     pub max_sequences: usize,
 
-    /// Residues summed over one request.
-    #[arg(long, env = "GATEWAY_MAX_REQUEST_RESIDUES", default_value_t = 65_536)]
+    /// Residues summed over one request (about 8 full-length proteins);
+    /// bulk work belongs in the batch job.
+    #[arg(long, env = "GATEWAY_MAX_REQUEST_RESIDUES", default_value_t = 8_192)]
     pub max_request_residues: usize,
 
     /// Residues in one sequence (ESM-2: 1,022).
@@ -66,13 +67,17 @@ pub struct Config {
     #[arg(long, env = "GATEWAY_MAX_PADDING", default_value_t = 0.10)]
     pub max_padding: f64,
 
-    /// Longest a sequence waits for others to share its batch, in milliseconds.
-    #[arg(long, env = "GATEWAY_MAX_WAIT_MS", default_value_t = 10)]
+    /// Longest a sequence waits for others to share its batch, in
+    /// milliseconds. 0: send as soon as the model server is free; batches
+    /// still form while it is busy. Load tests found no benefit in waiting.
+    #[arg(long, env = "GATEWAY_MAX_WAIT_MS", default_value_t = 0)]
     pub max_wait_ms: u64,
 
     /// Tokens (residues + 2 per sequence) that may wait in the queue; a
     /// request that would exceed it gets 503 at once instead of waiting.
-    #[arg(long, env = "GATEWAY_MAX_QUEUE_TOKENS", default_value_t = 131_072)]
+    /// The default is about 1.2 s of work for ESM-2 8M on 2 CPU threads;
+    /// scale it with the model server's throughput.
+    #[arg(long, env = "GATEWAY_MAX_QUEUE_TOKENS", default_value_t = 16_384)]
     pub max_queue_tokens: usize,
 
     /// After shutdown starts, seconds to wait for requests in progress

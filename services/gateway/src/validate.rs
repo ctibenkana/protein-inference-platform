@@ -26,7 +26,7 @@ impl Default for Limits {
     fn default() -> Self {
         Self {
             max_sequences: 64,
-            max_request_residues: 65_536,
+            max_request_residues: 8_192,
             max_residues: 1_022,
         }
     }

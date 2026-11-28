@@ -7,11 +7,12 @@ batching); the model server only runs the batches it is given.
 
 Design and plan: [docs/design/gateway.md](../../docs/design/gateway.md).
 
-> **Status:** step 4 of 6. Dynamic, length-aware batching across requests:
+> **Status:** step 5 of 6. Dynamic, length-aware batching across requests:
 > with 300 proteins arriving as 300 simultaneous requests, padding fell from
 > 43% (FIFO) to under 5% and all requests finished 2–2.6× sooner. A bounded
 > queue refuses excess work in milliseconds, and shutdown drains within a
-> time limit. Next: load tests that set the latency SLO.
+> time limit. Open-loop load tests: length-aware batching carries 3–4× the
+> load of FIFO at the same latency ([results](../../docs/benchmarks/gateway-load-tests.md)).
 
 ## API
 
@@ -34,7 +35,7 @@ curl -s gateway/v1/embeddings -H 'content-type: application/json' \
 | Status | Meaning |
 |---|---|
 | 400 | malformed body or bad timeout header |
-| 413 | over 64 sequences or 65,536 residues in one request |
+| 413 | over 64 sequences or 8,192 residues in one request (bulk work: use the batch job) |
 | 422 | empty sequence, over 1,022 residues, or not amino-acid letters; the message names the position |
 | 503 `overloaded` + `Retry-After` | the queue is full; nothing was queued |
 | 503 `backend_unavailable` + `Retry-After` | model server unavailable (after one retry) |
@@ -48,7 +49,7 @@ Sequences from different requests share batches. The oldest queued sequence
 always goes in the next batch (nothing starves); the rest are the ones that
 add the least padding, up to a token budget and a **padding cap** (10%), so
 the padding SLO holds by construction. A lone request at low load waits at
-most `--max-wait-ms` (10 ms). See the
+most `--max-wait-ms` (default 0: nothing waits when the model server is free; batches form while it is busy). See the
 [design](../../docs/design/gateway.md#batching) for the rules and their
 property tests.
 
@@ -57,9 +58,9 @@ property tests.
 | `--batching` | `length-aware` | or `fifo`, the baseline for comparisons |
 | `--max-batch-tokens` | 8192 | batch size × (longest + 2) |
 | `--max-padding` | 0.10 | highest padding share of a length-aware batch |
-| `--max-wait-ms` | 10 | longest a sequence waits for company |
+| `--max-wait-ms` | 0 | longest a sequence waits for company (load tests found no benefit in waiting) |
 | `--backend-concurrency` | 1 | batches in flight (model-server replicas) |
-| `--max-queue-tokens` | 131072 | queued tokens before new requests are refused |
+| `--max-queue-tokens` | 16384 | queued tokens before new requests are refused (~1.2 s of work here) |
 | `--drain-timeout` | 30 | seconds to finish work in progress on shutdown |
 
 ## Behaviour worth knowing
@@ -85,6 +86,14 @@ property tests.
   covers live traffic too.
 - **Abandoned work is never run.** Items whose caller gave up or whose
   deadline passed are dropped from the queue before batching.
+
+## Load testing
+
+`loadgen` (in this crate, shipped in the image) is an open-loop generator:
+Poisson arrivals at fixed rates, latency measured from each request's
+scheduled time. `bench/run.sh` reproduces the local experiments;
+`make loadtest` runs it as a Job against the deployed gateway. Results and
+method: [docs/benchmarks/gateway-load-tests.md](../../docs/benchmarks/gateway-load-tests.md).
 
 ## Build and run
 

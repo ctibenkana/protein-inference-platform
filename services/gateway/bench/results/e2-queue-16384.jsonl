@@ -1,0 +1,1 @@
+{"label":"e2-queue-16384","offered_rps":35.0,"sequences_per_request":1,"measured_seconds":30.0,"sent":1018,"ok":945,"overloaded":73,"timed_out":0,"other_errors":0,"ok_rps":31.5,"residues_per_second":13584.466666666667,"p50_s":0.653567892,"p90_s":2.017796939,"p99_s":3.021640712,"max_s":3.548058741,"padding":0.07821402487643306,"mean_batch_sequences":4.1938325991189425}
